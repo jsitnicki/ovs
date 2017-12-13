@@ -89,6 +89,7 @@ def unlink_file_now(file):
 
 def _unlink_files():
     for file_ in _files:
+        vlog.info("unlinking file '%s'" % (file_))
         if sys.platform == "win32" and _files[file_]:
             _files[file_].close()
         _unlink(file_)
@@ -130,6 +131,8 @@ def _call_hooks(signr):
     if recurse:
         return
     recurse = True
+
+    vlog.warn("calling hooks due to sig %d" % (signr))
 
     for hook, cancel, run_at_exit in _hooks:
         if signr != 0 or run_at_exit:

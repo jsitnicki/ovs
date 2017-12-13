@@ -1,0 +1,3 @@
+#!/bin/bash -x
+
+exec make -j$(nproc) check TESTSUITEFLAGS="-j$(nproc) $*"

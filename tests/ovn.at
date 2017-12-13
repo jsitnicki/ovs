@@ -1903,7 +1903,10 @@ vtep-ctl add-ps br-vtep
 vtep-ctl set Physical_Switch br-vtep tunnel_ips=192.168.0.3
 vtep-ctl add-ls lsw0
 
-start_daemon ovs-vtep br-vtep
+# start_daemon ovs-vtep br-vtep
+strace -e open,close,fcntl -o "$ovs_base"/vtep/ovs-vtep.strace ovs-vtep br-vtep -vconsole:off --no-chdir --pidfile --log-file &
+pid=$!
+on_exit "kill $pid"
 start_daemon ovn-controller-vtep --vtep-db=unix:"$ovs_base"/vtep/db.sock --ovnsb-db=unix:"$ovs_base"/ovn-sb/ovn-sb.sock
 
 OVS_WAIT_UNTIL([vtep-ctl bind-ls br-vtep br-vtep_n2 0 lsw0])
@@ -2032,7 +2035,19 @@ for i in 1 2 3; do
 done
 
 # Gracefully terminate daemons
-OVN_CLEANUP([hv1],[hv2],[vtep])
+# OVN_CLEANUP_SBOX([hv1],[hv2],[vtep])
+
+OVN_CLEANUP_SBOX([hv1])
+OVN_CLEANUP_SBOX([hv2])
+
+printf "Sleeping"
+for i in `seq 10000`; do
+    printf "."
+    sleep 1
+done
+printf "\n"
+
+OVN_CLEANUP([vtep])
 OVN_CLEANUP_VSWITCH([hv3])
 
 AT_CLEANUP
