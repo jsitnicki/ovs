@@ -52,5 +52,13 @@ void physical_run(struct ovn_desired_flow_table *,
                   const struct sset *local_lports,
                   struct chassis_index *chassis_index,
                   struct sset *active_tunnels);
+void physical_handle_port_binding_changes(struct ovn_desired_flow_table *,
+                                          struct controller_ctx *,
+                                          enum mf_field_id mff_ovn_geneve,
+                                          const struct sbrec_chassis *,
+                                          const struct simap *ct_zones,
+                                          struct hmap *local_datapaths,
+                                          struct chassis_index *,
+                                          struct sset *active_tunnels);
 
 #endif /* ovn/physical.h */
