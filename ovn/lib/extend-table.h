@@ -23,6 +23,7 @@
 #include "openvswitch/dynamic-string.h"
 #include "openvswitch/hmap.h"
 #include "openvswitch/list.h"
+#include "openvswitch/uuid.h"
 
 /* Used to manage expansion tables associated with Flow table,
  * such as the Group Table or Meter Table. */
@@ -37,6 +38,7 @@ struct ovn_extend_table {
 struct ovn_extend_table_info {
     struct hmap_node hmap_node;
     struct ds info;     /* Details string for the table entity. */
+    struct uuid lflow_uuid;
     uint32_t table_id;
     bool new_table_id;  /* 'True' if 'table_id' was reserved from
                          * ovn_extend_table's 'table_ids' bitmap. */
@@ -51,14 +53,18 @@ struct ovn_extend_table_info *ovn_extend_table_lookup(
 
 void ovn_extend_table_clear(struct ovn_extend_table *, bool);
 
-void ovn_extend_table_remove(struct ovn_extend_table *,
-                             struct ovn_extend_table_info *);
+void ovn_extend_table_remove_existing(struct ovn_extend_table *,
+                                      struct ovn_extend_table_info *);
 
-/* Move the contents of desired to existing. */
-void ovn_extend_table_move(struct ovn_extend_table *);
+void ovn_extend_table_remove_desired(struct ovn_extend_table *,
+                                     const struct uuid *lflow_uuid);
+
+/* Copy the contents of desired to existing. */
+void ovn_extend_table_sync(struct ovn_extend_table *);
 
 uint32_t ovn_extend_table_assign_id(struct ovn_extend_table *,
-                                    struct ds *);
+                                    struct ds *,
+                                    struct uuid lflow_uuid);
 
 /* Iterates 'DESIRED' through all of the 'ovn_extend_table_info's in
  * 'TABLE'->desired that are not in 'TABLE'->existing.  (The loop body

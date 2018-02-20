@@ -747,11 +747,13 @@ en_runtime_data_run(struct engine_node *node)
 
 struct ed_type_flow_output {
     /* desired flows */
-    struct hmap flow_table;
+    struct ovn_desired_flow_table flow_table;
     /* group ids for load balancing */
     struct ovn_extend_table group_table;
     /* meter ids for QoS */
     struct ovn_extend_table meter_table;
+    /* conjunction id offset */
+    uint32_t conj_id_ofs;
 };
 
 static void
@@ -759,9 +761,10 @@ en_flow_output_init(struct engine_node *node)
 {
     struct ed_type_flow_output *data =
         (struct ed_type_flow_output *)node->data;
-    hmap_init(&data->flow_table);
+    ovn_desired_flow_table_init(&data->flow_table);
     ovn_extend_table_init(&data->group_table);
     ovn_extend_table_init(&data->meter_table);
+    data->conj_id_ofs = 1;
 }
 
 static void
@@ -769,7 +772,7 @@ en_flow_output_cleanup(struct engine_node *node)
 {
     struct ed_type_flow_output *data =
         (struct ed_type_flow_output *)node->data;
-    hmap_destroy(&data->flow_table);
+    ovn_desired_flow_table_destroy(&data->flow_table);
     ovn_extend_table_destroy(&data->group_table);
     ovn_extend_table_destroy(&data->meter_table);
 }
@@ -803,29 +806,75 @@ en_flow_output_run(struct engine_node *node)
 
     struct ed_type_flow_output *fo =
         (struct ed_type_flow_output *)node->data;
-    struct hmap *flow_table = &fo->flow_table;
+    struct ovn_desired_flow_table *flow_table = &fo->flow_table;
     struct ovn_extend_table *group_table = &fo->group_table;
     struct ovn_extend_table *meter_table = &fo->meter_table;
+    uint32_t *conj_id_ofs = &fo->conj_id_ofs;
 
     static bool first_run = true;
     if (first_run) {
         first_run = false;
     } else {
-        hmap_clear(flow_table);
+        ovn_desired_flow_table_clear(flow_table);
+        ovn_extend_table_clear(group_table, false /* desired */);
+        ovn_extend_table_clear(meter_table, false /* desired */);
     }
 
-    lflow_run(ctx, chassis,
+    *conj_id_ofs = 1;
+    lflow_run(flow_table, ctx, chassis,
               chassis_index, local_datapaths, group_table,
-              meter_table, addr_sets, port_groups, flow_table,
-              active_tunnels, local_lport_ids);
+              meter_table, addr_sets, port_groups, active_tunnels,
+              local_lport_ids, conj_id_ofs);
 
     enum mf_field_id mff_ovn_geneve = ofctrl_get_mf_field_id();
 
-    physical_run(ctx, mff_ovn_geneve,
+    physical_run(flow_table, ctx, mff_ovn_geneve,
                  br_int, chassis, ct_zones,
-                 flow_table, local_datapaths, local_lports,
+                 local_datapaths, local_lports,
                  chassis_index, active_tunnels);
+
     node->changed = true;
+}
+
+static bool
+flow_output_sb_logical_flow_handler(struct engine_node *node)
+{
+    struct controller_ctx *ctx = (struct controller_ctx *)node->context;
+    struct ed_type_runtime_data *data =
+        (struct ed_type_runtime_data *)engine_get_input(
+                "runtime_data", node)->data;
+    struct hmap *local_datapaths = &data->local_datapaths;
+    struct sset *local_lport_ids = &data->local_lport_ids;
+    struct sset *active_tunnels = &data->active_tunnels;
+    struct chassis_index *chassis_index = &data->chassis_index;
+    struct shash *addr_sets = &data->addr_sets;
+    struct shash *port_groups = &data->port_groups;
+    const struct ovsrec_bridge *br_int = get_br_int(ctx);
+
+    const char *chassis_id = get_chassis_id(ctx->ovs_idl);
+
+
+    const struct sbrec_chassis *chassis = NULL;
+    if (chassis_id) {
+        chassis = get_chassis(ctx->ovnsb_idl, chassis_id);
+    }
+
+    ovs_assert(br_int && chassis);
+
+    struct ed_type_flow_output *fo =
+        (struct ed_type_flow_output *)node->data;
+    struct ovn_desired_flow_table *flow_table = &fo->flow_table;
+    struct ovn_extend_table *group_table = &fo->group_table;
+    struct ovn_extend_table *meter_table = &fo->meter_table;
+    uint32_t *conj_id_ofs = &fo->conj_id_ofs;
+
+    bool handled = lflow_handle_changed_flows(flow_table, ctx, chassis,
+              chassis_index, local_datapaths, group_table, meter_table,
+              addr_sets, port_groups, active_tunnels, local_lport_ids,
+              conj_id_ofs);
+
+    node->changed = true;
+    return handled;
 }
 
 int
@@ -911,13 +960,11 @@ main(int argc, char *argv[])
 
     engine_add_input(&en_flow_output, &en_sb_chassis, NULL);
     engine_add_input(&en_flow_output, &en_sb_encap, NULL);
-    engine_add_input(&en_flow_output, &en_sb_address_set, NULL);
-    engine_add_input(&en_flow_output, &en_sb_port_group, NULL);
     engine_add_input(&en_flow_output, &en_sb_multicast_group, NULL);
     engine_add_input(&en_flow_output, &en_sb_datapath_binding, NULL);
     engine_add_input(&en_flow_output, &en_sb_port_binding, NULL);
     engine_add_input(&en_flow_output, &en_sb_mac_binding, NULL);
-    engine_add_input(&en_flow_output, &en_sb_logical_flow, NULL);
+    engine_add_input(&en_flow_output, &en_sb_logical_flow, flow_output_sb_logical_flow_handler);
     engine_add_input(&en_flow_output, &en_sb_dhcp_options, NULL);
     engine_add_input(&en_flow_output, &en_sb_dhcpv6_options, NULL);
     engine_add_input(&en_flow_output, &en_sb_dns, NULL);
@@ -928,6 +975,7 @@ main(int argc, char *argv[])
 
     engine_add_input(&en_runtime_data, &en_sb_chassis, NULL);
     engine_add_input(&en_runtime_data, &en_sb_address_set, NULL);
+    engine_add_input(&en_runtime_data, &en_sb_port_group, NULL);
     engine_add_input(&en_runtime_data, &en_sb_datapath_binding, NULL);
     engine_add_input(&en_runtime_data, &en_sb_port_binding, NULL);
     engine_add_input(&en_runtime_data, &en_sb_gateway_chassis, NULL);
@@ -945,6 +993,7 @@ main(int argc, char *argv[])
 
     uint64_t engine_run_id = 0;
     uint64_t old_engine_run_id = 0;
+
     /* Main loop. */
     exiting = false;
     while (!exiting) {
@@ -981,33 +1030,30 @@ main(int argc, char *argv[])
             patch_run(&ctx, br_int, chassis);
             encaps_run(&ctx, br_int, chassis_id);
 
-            if (ofctrl_can_put()) {
-                stopwatch_start(CONTROLLER_LOOP_STOPWATCH_NAME,
-                                time_msec());
-                engine_run(&en_flow_output, ++engine_run_id);
-                stopwatch_stop(CONTROLLER_LOOP_STOPWATCH_NAME,
-                               time_msec());
-
-                if (ctx.ovs_idl_txn) {
-                    commit_ct_zones(br_int, &ed_runtime_data.pending_ct_zones);
-                    bfd_run(&ctx, br_int, chassis,
-                            &ed_runtime_data.local_datapaths,
-                            &ed_runtime_data.chassis_index);
-                }
-                if (en_flow_output.changed) {
-                    ofctrl_put(&ed_flow_output.flow_table,
-                               &ed_runtime_data.pending_ct_zones,
-                               get_nb_cfg(ctx.ovnsb_idl));
-                }
+            stopwatch_start(CONTROLLER_LOOP_STOPWATCH_NAME,
+                            time_msec());
+            engine_run(&en_flow_output, ++engine_run_id);
+            stopwatch_stop(CONTROLLER_LOOP_STOPWATCH_NAME,
+                           time_msec());
+            if (ctx.ovs_idl_txn) {
+                commit_ct_zones(br_int, &ed_runtime_data.pending_ct_zones);
+                bfd_run(&ctx, br_int, chassis,
+                        &ed_runtime_data.local_datapaths,
+                        &ed_runtime_data.chassis_index);
             }
-
+            ofctrl_put(&ed_flow_output.flow_table,
+                       &ed_runtime_data.pending_ct_zones,
+                       get_nb_cfg(ctx.ovnsb_idl),
+                       en_flow_output.changed);
             pinctrl_run(&ctx, br_int, chassis, &ed_runtime_data.chassis_index,
                         &ed_runtime_data.local_datapaths,
                         &ed_runtime_data.active_tunnels);
 
-            update_sb_monitors(ctx.ovnsb_idl, chassis,
-                               &ed_runtime_data.local_lports,
-                               &ed_runtime_data.local_datapaths);
+            if (en_runtime_data.changed) {
+                update_sb_monitors(ctx.ovnsb_idl, chassis,
+                                   &ed_runtime_data.local_lports,
+                                   &ed_runtime_data.local_datapaths);
+            }
 
         }
         if (old_engine_run_id == engine_run_id) {
