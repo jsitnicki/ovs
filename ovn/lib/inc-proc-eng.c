@@ -139,3 +139,23 @@ engine_run(struct engine_node *node, uint64_t run_id)
 
     VLOG_DBG("node: %s, changed: %d", node->name, node->changed);
 }
+
+bool
+engine_need_run(struct engine_node *node)
+{
+    size_t i;
+
+    if (!node->n_inputs) {
+        node->run(node);
+        VLOG_DBG("input node: %s, changed: %d", node->name, node->changed);
+        return node->changed;
+    }
+
+    for (i = 0; i < node->n_inputs; i++) {
+        if (engine_need_run(node->inputs[i].node)) {
+            return true;
+        }
+    }
+
+    return false;
+}

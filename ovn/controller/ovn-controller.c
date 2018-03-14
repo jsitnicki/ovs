@@ -1157,10 +1157,15 @@ main(int argc, char *argv[])
 
         }
         if (old_engine_run_id == engine_run_id) {
-            VLOG_DBG("engine did not run, force recompute next time: "
-                     "br_int %p, chassis %p", br_int, chassis);
-            engine_set_force_recompute(true);
-            poll_immediate_wake();
+            if (engine_need_run(&en_flow_output)) {
+                VLOG_DBG("engine did not run, force recompute next time: "
+                         "br_int %p, chassis %p", br_int, chassis);
+                engine_set_force_recompute(true);
+                poll_immediate_wake();
+            } else {
+                VLOG_DBG("engine did not run, and it was not needed either: "
+                         "br_int %p, chassis %p", br_int, chassis);
+            }
         } else {
             engine_set_force_recompute(false);
         }
