@@ -62,6 +62,7 @@ struct condition_aux {
 };
 
 static bool consider_logical_flow(struct ovn_desired_flow_table *flow_table,
+                                  struct lflow_resource_ref *lfrr,
                                   struct controller_ctx *ctx,
                                   const struct chassis_index *chassis_index,
                                   const struct sbrec_logical_flow *lflow,
@@ -135,9 +136,132 @@ is_switch(const struct sbrec_datapath_binding *ldp)
 
 }
 
+void
+lflow_resource_init(struct lflow_resource_ref *lfrr)
+{
+    hmap_init(&lfrr->ref_lflow_table);
+    hmap_init(&lfrr->lflow_ref_table);
+}
+
+void
+lflow_resource_destroy(struct lflow_resource_ref *lfrr)
+{
+    struct ref_lflow_node *rlfn, *rlfn_next;
+    HMAP_FOR_EACH_SAFE (rlfn, rlfn_next, node, &lfrr->ref_lflow_table) {
+        free(rlfn->ref_name);
+        struct lflow_ref_list_node *lrln, *next;
+        LIST_FOR_EACH_SAFE (lrln, next, ref_list, &rlfn->ref_lflow_head) {
+            ovs_list_remove(&lrln->ref_list);
+            ovs_list_remove(&lrln->lflow_list);
+            free(lrln);
+        }
+        hmap_remove(&lfrr->ref_lflow_table, &rlfn->node);
+        free(rlfn);
+    }
+    hmap_destroy(&lfrr->ref_lflow_table);
+
+    struct lflow_ref_node *lfrn, *lfrn_next;
+    HMAP_FOR_EACH_SAFE (lfrn, lfrn_next, node, &lfrr->lflow_ref_table) {
+        hmap_remove(&lfrr->lflow_ref_table, &lfrn->node);
+        free(lfrn);
+    }
+    hmap_destroy(&lfrr->lflow_ref_table);
+}
+
+void
+lflow_resource_clear(struct lflow_resource_ref *lfrr)
+{
+    lflow_resource_destroy(lfrr);
+    lflow_resource_init(lfrr);
+}
+
+static struct ref_lflow_node*
+ref_lflow_lookup(struct hmap *ref_lflow_table,
+                 enum ref_type type, const char *ref_name)
+{
+    struct ref_lflow_node *rlfn;
+
+    HMAP_FOR_EACH_WITH_HASH (rlfn, node, hash_string(ref_name, type),
+                             ref_lflow_table) {
+        if (rlfn->type == type && !strcmp(rlfn->ref_name, ref_name)) {
+            return rlfn;
+        }
+    }
+    return NULL;
+}
+
+static struct lflow_ref_node*
+lflow_ref_lookup(struct hmap *lflow_ref_table,
+                 const struct uuid *lflow_uuid)
+{
+    struct lflow_ref_node *lfrn;
+
+    HMAP_FOR_EACH_WITH_HASH (lfrn, node, uuid_hash(lflow_uuid),
+                             lflow_ref_table) {
+        if (uuid_equals(&lfrn->lflow_uuid, lflow_uuid)) {
+            return lfrn;
+        }
+    }
+    return NULL;
+}
+
+static void
+lflow_resource_add(struct lflow_resource_ref *lfrr, enum ref_type type,
+                   const char *ref_name, const struct uuid *lflow_uuid)
+{
+    struct ref_lflow_node *rlfn = ref_lflow_lookup(&lfrr->ref_lflow_table,
+                                                   type, ref_name);
+    if (!rlfn) {
+        rlfn = xzalloc(sizeof *rlfn);
+        rlfn->node.hash = hash_string(ref_name, type);
+        rlfn->type = type;
+        rlfn->ref_name = xstrdup(ref_name);
+        ovs_list_init(&rlfn->ref_lflow_head);
+        hmap_insert(&lfrr->ref_lflow_table, &rlfn->node, rlfn->node.hash);
+    }
+
+    struct lflow_ref_node *lfrn = lflow_ref_lookup(&lfrr->lflow_ref_table,
+                                                   lflow_uuid);
+    if (!lfrn) {
+        lfrn = xzalloc(sizeof *lfrn);
+        lfrn->node.hash = uuid_hash(lflow_uuid);
+        lfrn->lflow_uuid = *lflow_uuid;
+        ovs_list_init(&lfrn->lflow_ref_head);
+        hmap_insert(&lfrr->lflow_ref_table, &lfrn->node, lfrn->node.hash);
+    }
+
+    struct lflow_ref_list_node *lrln = xzalloc(sizeof *lrln);
+    lrln->type = type;
+    lrln->ref_name = xstrdup(ref_name);
+    lrln->lflow_uuid = *lflow_uuid;
+    ovs_list_push_back(&rlfn->ref_lflow_head, &lrln->ref_list);
+    ovs_list_push_back(&lfrn->lflow_ref_head, &lrln->lflow_list);
+}
+
+static void
+lflow_resource_destroy_lflow(struct lflow_resource_ref *lfrr,
+                            const struct uuid *lflow_uuid)
+{
+    struct lflow_ref_node *lfrn = lflow_ref_lookup(&lfrr->lflow_ref_table,
+                                                   lflow_uuid);
+    if (!lfrn) {
+        return;
+    }
+
+    hmap_remove(&lfrr->lflow_ref_table, &lfrn->node);
+    struct lflow_ref_list_node *lrln, *next;
+    LIST_FOR_EACH_SAFE (lrln, next, lflow_list, &lfrn->lflow_ref_head) {
+        ovs_list_remove(&lrln->ref_list);
+        ovs_list_remove(&lrln->lflow_list);
+        free(lrln);
+    }
+    free(lfrn);
+}
+
 /* Adds the logical flows from the Logical_Flow table to flow tables. */
 static void
 add_logical_flows(struct ovn_desired_flow_table *flow_table,
+                  struct lflow_resource_ref *lfrr,
                   struct controller_ctx *ctx,
                   const struct chassis_index *chassis_index,
                   const struct hmap *local_datapaths,
@@ -171,7 +295,7 @@ add_logical_flows(struct ovn_desired_flow_table *flow_table,
     nd_ra_opts_init(&nd_ra_opts);
 
     SBREC_LOGICAL_FLOW_FOR_EACH (lflow, ctx->ovnsb_idl) {
-        if (!consider_logical_flow(flow_table, ctx, chassis_index,
+        if (!consider_logical_flow(flow_table, lfrr, ctx, chassis_index,
                                    lflow, local_datapaths,
                                    group_table, meter_table, chassis,
                                    &dhcp_opts, &dhcpv6_opts, &nd_ra_opts,
@@ -190,6 +314,7 @@ add_logical_flows(struct ovn_desired_flow_table *flow_table,
 
 bool
 lflow_handle_changed_flows(struct ovn_desired_flow_table *flow_table,
+                           struct lflow_resource_ref *lfrr,
                            struct controller_ctx *ctx,
                            const struct sbrec_chassis *chassis,
                            const struct chassis_index *chassis_index,
@@ -232,6 +357,8 @@ lflow_handle_changed_flows(struct ovn_desired_flow_table *flow_table,
             VLOG_DBG("handle deleted lflow "UUID_FMT,
                      UUID_ARGS(&lflow->header_.uuid));
             ofctrl_remove_flows(flow_table, &lflow->header_.uuid);
+            /* Delete entries from lflow resource reference. */
+            lflow_resource_destroy_lflow(lfrr, &lflow->header_.uuid);
         }
     }
     SBREC_LOGICAL_FLOW_FOR_EACH_TRACKED (lflow, ctx->ovnsb_idl) {
@@ -243,10 +370,12 @@ lflow_handle_changed_flows(struct ovn_desired_flow_table *flow_table,
                 VLOG_DBG("handle updated lflow "UUID_FMT,
                          UUID_ARGS(&lflow->header_.uuid));
                 ofctrl_remove_flows(flow_table, &lflow->header_.uuid);
+                /* Delete entries from lflow resource reference. */
+                lflow_resource_destroy_lflow(lfrr, &lflow->header_.uuid);
             }
             VLOG_DBG("handle new lflow "UUID_FMT,
                      UUID_ARGS(&lflow->header_.uuid));
-            if (!consider_logical_flow(flow_table, ctx, chassis_index,
+            if (!consider_logical_flow(flow_table, lfrr, ctx, chassis_index,
                                        lflow, local_datapaths,
                                        group_table, meter_table, chassis,
                                        &dhcp_opts, &dhcpv6_opts, &nd_ra_opts,
@@ -276,6 +405,7 @@ update_conj_id_ofs(uint32_t *conj_id_ofs, uint32_t n_conjs)
 
 static bool
 consider_logical_flow(struct ovn_desired_flow_table *flow_table,
+                      struct lflow_resource_ref *lfrr,
                       struct controller_ctx *ctx,
                       const struct chassis_index *chassis_index,
                       const struct sbrec_logical_flow *lflow,
@@ -349,8 +479,16 @@ consider_logical_flow(struct ovn_desired_flow_table *flow_table,
     struct hmap matches;
     struct expr *expr;
 
+    struct sset addr_sets_ref = SSET_INITIALIZER(&addr_sets_ref);
     expr = expr_parse_string(lflow->match, &symtab, addr_sets, port_groups,
-                             &error);
+                             &addr_sets_ref, &error);
+    const char *addr_set_name;
+    SSET_FOR_EACH (addr_set_name, &addr_sets_ref) {
+        lflow_resource_add(lfrr, REF_TYPE_ADDRSET, addr_set_name,
+                           &lflow->header_.uuid);
+    }
+    sset_destroy(&addr_sets_ref);
+
     if (!error) {
         if (prereqs) {
             expr = expr_combine(EXPR_T_AND, expr, prereqs);
@@ -544,6 +682,7 @@ add_neighbor_flows(struct ovn_desired_flow_table *flow_table,
  * into OpenFlow flows.  See ovn-architecture(7) for more information. */
 void
 lflow_run(struct ovn_desired_flow_table *flow_table,
+          struct lflow_resource_ref *lfrr,
           struct controller_ctx *ctx,
           const struct sbrec_chassis *chassis,
           const struct chassis_index *chassis_index,
@@ -558,7 +697,7 @@ lflow_run(struct ovn_desired_flow_table *flow_table,
 {
     COVERAGE_INC(lflow_run);
 
-    add_logical_flows(flow_table, ctx, chassis_index, local_datapaths,
+    add_logical_flows(flow_table, lfrr, ctx, chassis_index, local_datapaths,
                       group_table, meter_table, chassis, addr_sets,
                       port_groups, active_tunnels, local_lport_ids,
                       conj_id_ofs);

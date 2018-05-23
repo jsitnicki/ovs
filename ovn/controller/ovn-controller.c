@@ -831,6 +831,8 @@ struct ed_type_flow_output {
     struct ovn_extend_table meter_table;
     /* conjunction id offset */
     uint32_t conj_id_ofs;
+    /* lflow resource cross reference */
+    struct lflow_resource_ref lflow_resource_ref;
 };
 
 static void
@@ -842,6 +844,7 @@ en_flow_output_init(struct engine_node *node)
     ovn_extend_table_init(&data->group_table);
     ovn_extend_table_init(&data->meter_table);
     data->conj_id_ofs = 1;
+    lflow_resource_init(&data->lflow_resource_ref);
 }
 
 static void
@@ -852,6 +855,7 @@ en_flow_output_cleanup(struct engine_node *node)
     ovn_desired_flow_table_destroy(&data->flow_table);
     ovn_extend_table_destroy(&data->group_table);
     ovn_extend_table_destroy(&data->meter_table);
+    lflow_resource_destroy(&data->lflow_resource_ref);
 }
 
 static void
@@ -890,6 +894,7 @@ en_flow_output_run(struct engine_node *node)
     struct ovn_extend_table *group_table = &fo->group_table;
     struct ovn_extend_table *meter_table = &fo->meter_table;
     uint32_t *conj_id_ofs = &fo->conj_id_ofs;
+    struct lflow_resource_ref *lfrr = &fo->lflow_resource_ref;
 
     static bool first_run = true;
     if (first_run) {
@@ -898,12 +903,12 @@ en_flow_output_run(struct engine_node *node)
         ovn_desired_flow_table_clear(flow_table);
         ovn_extend_table_clear(group_table, false /* desired */);
         ovn_extend_table_clear(meter_table, false /* desired */);
+        lflow_resource_clear(lfrr);
     }
 
     *conj_id_ofs = 1;
-    lflow_run(flow_table, ctx, chassis,
-              chassis_index, local_datapaths, group_table,
-              meter_table, addr_sets, port_groups, active_tunnels,
+    lflow_run(flow_table, lfrr, ctx, chassis, chassis_index, local_datapaths,
+              group_table, meter_table, addr_sets, port_groups, active_tunnels,
               local_lport_ids, conj_id_ofs);
 
     enum mf_field_id mff_ovn_geneve = ofctrl_get_mf_field_id();
@@ -950,8 +955,9 @@ flow_output_sb_logical_flow_handler(struct engine_node *node)
     struct ovn_extend_table *group_table = &fo->group_table;
     struct ovn_extend_table *meter_table = &fo->meter_table;
     uint32_t *conj_id_ofs = &fo->conj_id_ofs;
+    struct lflow_resource_ref *lfrr = &fo->lflow_resource_ref;
 
-    bool handled = lflow_handle_changed_flows(flow_table, ctx, chassis,
+    bool handled = lflow_handle_changed_flows(flow_table, lfrr, ctx, chassis,
               chassis_index, local_datapaths, group_table, meter_table,
               addr_sets, port_groups, active_tunnels, local_lport_ids,
               conj_id_ofs);

@@ -34,12 +34,16 @@
  */
 
 #include <stdint.h>
+#include "openvswitch/hmap.h"
+#include "openvswitch/uuid.h"
+#include "openvswitch/list.h"
 
 struct chassis_index;
 struct controller_ctx;
 struct ovn_extend_table;
 struct ovn_desired_flow_table;
 struct hmap;
+struct hmap_node;
 struct sbrec_chassis;
 struct simap;
 struct sset;
@@ -62,8 +66,55 @@ struct uuid;
 /* The number of tables for the ingress and egress pipelines. */
 #define LOG_PIPELINE_LEN 24
 
+enum ref_type {
+    REF_TYPE_ADDRSET
+};
+
+/* Maintains the relationship for a pair of named resource and
+ * a lflow, indexed by both ref_lflow_table and lflow_ref_table. */
+struct lflow_ref_list_node {
+    struct ovs_list lflow_list; /* list for same lflow */
+    struct ovs_list ref_list; /* list for same ref */
+    enum ref_type type;
+    char *ref_name;
+    struct uuid lflow_uuid;
+};
+
+struct ref_lflow_node {
+    struct hmap_node node;
+    enum ref_type type; /* key */
+    char *ref_name; /* key */
+    struct ovs_list ref_lflow_head;
+};
+
+struct lflow_ref_node {
+    struct hmap_node node;
+    struct uuid lflow_uuid; /* key */
+    struct ovs_list lflow_ref_head;
+};
+
+struct lflow_resource_ref {
+    /* A map from a referenced resource type & name (e.g. address_set AS1)
+     * to a list of lflows that are referencing the named resource. Data
+     * type of each node in this hmap is struct ref_lflow_node. The
+     * ref_lflow_head in each node points to a list of
+     * lflow_ref_list_node.ref_list. */
+    struct hmap ref_lflow_table;
+
+    /* A map from a lflow uuid to a list of named resources that are
+     * referenced by the lflow. Data type of each node in this hmap is
+     * struct lflow_ref_node. The lflow_ref_head in each node points to
+     * a list of lflow_ref_list_node.lflow_list. */
+    struct hmap lflow_ref_table;
+};
+
+void lflow_resource_init(struct lflow_resource_ref *);
+void lflow_resource_destroy(struct lflow_resource_ref *);
+void lflow_resource_clear(struct lflow_resource_ref *);
+
 void lflow_init(void);
 void lflow_run(struct ovn_desired_flow_table *,
+               struct lflow_resource_ref *,
                struct controller_ctx *,
                const struct sbrec_chassis *chassis,
                const struct chassis_index *,
@@ -76,6 +127,7 @@ void lflow_run(struct ovn_desired_flow_table *,
                struct sset *local_lport_ids,
                uint32_t *conj_id_ofs);
 bool lflow_handle_changed_flows(struct ovn_desired_flow_table *,
+                                struct lflow_resource_ref *,
                                 struct controller_ctx *ctx,
                                 const struct sbrec_chassis *chassis,
                                 const struct chassis_index *chassis_index,
