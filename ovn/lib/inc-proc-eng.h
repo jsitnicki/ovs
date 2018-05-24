@@ -126,6 +126,10 @@ void engine_run(struct engine_node *, uint64_t run_id);
  * terminates. */
 void engine_cleanup(struct engine_node *);
 
+/* Check if engine needs to run, i.e. any change to be processed. */
+bool
+engine_need_run(struct engine_node *);
+
 /* Get the input node with <name> for <node> */
 struct engine_node * engine_get_input(const char *input_name,
                                       struct engine_node *);
