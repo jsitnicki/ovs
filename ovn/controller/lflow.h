@@ -38,6 +38,7 @@
 struct chassis_index;
 struct controller_ctx;
 struct ovn_extend_table;
+struct ovn_desired_flow_table;
 struct hmap;
 struct sbrec_chassis;
 struct simap;
@@ -62,7 +63,8 @@ struct uuid;
 #define LOG_PIPELINE_LEN 24
 
 void lflow_init(void);
-void lflow_run(struct controller_ctx *,
+void lflow_run(struct ovn_desired_flow_table *,
+               struct controller_ctx *,
                const struct sbrec_chassis *chassis,
                const struct chassis_index *,
                const struct hmap *local_datapaths,
@@ -70,9 +72,21 @@ void lflow_run(struct controller_ctx *,
                struct ovn_extend_table *meter_table,
                const struct shash *addr_sets,
                const struct shash *port_groups,
-               struct hmap *flow_table,
                struct sset *active_tunnels,
-               struct sset *local_lport_ids);
+               struct sset *local_lport_ids,
+               uint32_t *conj_id_ofs);
+bool lflow_handle_changed_flows(struct ovn_desired_flow_table *,
+                                struct controller_ctx *ctx,
+                                const struct sbrec_chassis *chassis,
+                                const struct chassis_index *chassis_index,
+                                const struct hmap *local_datapaths,
+                                struct ovn_extend_table *group_table,
+                                struct ovn_extend_table *extend_table,
+                                const struct shash *addr_sets,
+                                const struct shash *port_groups,
+                                struct sset *active_tunnels,
+                                struct sset *local_lport_ids,
+                                uint32_t *conj_id_ofs);
 void lflow_destroy(void);
 
 #endif /* ovn/lflow.h */
