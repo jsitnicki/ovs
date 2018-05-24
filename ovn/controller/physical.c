@@ -937,6 +937,29 @@ physical_handle_port_binding_changes(struct ovn_desired_flow_table *flow_table,
 }
 
 void
+physical_handle_mc_group_changes(struct ovn_desired_flow_table *flow_table,
+                                 struct controller_ctx *ctx,
+                                 enum mf_field_id mff_ovn_geneve,
+                                 const struct sbrec_chassis *chassis,
+                                 const struct simap *ct_zones,
+                                 struct hmap *local_datapaths)
+{
+    const struct sbrec_multicast_group *mc;
+    SBREC_MULTICAST_GROUP_FOR_EACH_TRACKED (mc, ctx->ovnsb_idl) {
+        if (sbrec_multicast_group_is_deleted(mc)) {
+            ofctrl_remove_flows(flow_table, &mc->header_.uuid);
+        } else {
+            if (!sbrec_multicast_group_is_new(mc)) {
+                ofctrl_remove_flows(flow_table, &mc->header_.uuid);
+            }
+            consider_mc_group(flow_table, mff_ovn_geneve, ct_zones,
+                              local_datapaths, chassis, mc);
+        }
+    }
+}
+
+
+void
 physical_run(struct ovn_desired_flow_table *flow_table,
              struct controller_ctx *ctx, enum mf_field_id mff_ovn_geneve,
              const struct ovsrec_bridge *br_int,
