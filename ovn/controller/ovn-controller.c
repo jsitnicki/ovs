@@ -603,6 +603,9 @@ ENGINE_FUNC_SB(dhcpv6_options);
 ENGINE_FUNC_SB(dns);
 ENGINE_FUNC_SB(gateway_chassis);
 
+ENGINE_FUNC_OVS(port);
+ENGINE_FUNC_OVS(interface);
+
 struct ed_type_runtime_data {
     struct chassis_index chassis_index;
 
@@ -729,6 +732,7 @@ en_runtime_data_run(struct engine_node *node)
 
     chassis_index_init(chassis_index, ctx->ovnsb_idl);
     bfd_calculate_active_tunnels(br_int, active_tunnels);
+    /* requires ctx->ovnsb_idl_txn */
     binding_run(ctx, br_int, chassis,
                 chassis_index, active_tunnels, local_datapaths,
                 local_lports, local_lport_ids);
@@ -895,9 +899,15 @@ main(int argc, char *argv[])
     ENGINE_NODE_SB(dns, "dns", &ctx);
     ENGINE_NODE_SB(gateway_chassis, "gateway_chassis", &ctx);
 
+    ENGINE_NODE_OVS(port, "ovs_table_port", &ctx);
+    ENGINE_NODE_OVS(interface, "ovs_table_interface", &ctx);
+
     ENGINE_NODE(runtime_data, "runtime_data", &ctx);
     ENGINE_NODE(flow_output, "flow_output", &ctx);
     engine_add_input(&en_flow_output, &en_runtime_data, NULL);
+
+    engine_add_input(&en_flow_output, &en_ovs_port, NULL);
+    engine_add_input(&en_flow_output, &en_ovs_interface, NULL);
 
     engine_add_input(&en_flow_output, &en_sb_chassis, NULL);
     engine_add_input(&en_flow_output, &en_sb_encap, NULL);
@@ -913,6 +923,15 @@ main(int argc, char *argv[])
     engine_add_input(&en_flow_output, &en_sb_dns, NULL);
     engine_add_input(&en_flow_output, &en_sb_gateway_chassis, NULL);
 
+    engine_add_input(&en_runtime_data, &en_ovs_port, NULL);
+    engine_add_input(&en_runtime_data, &en_ovs_interface, NULL);
+
+    engine_add_input(&en_runtime_data, &en_sb_chassis, NULL);
+    engine_add_input(&en_runtime_data, &en_sb_address_set, NULL);
+    engine_add_input(&en_runtime_data, &en_sb_datapath_binding, NULL);
+    engine_add_input(&en_runtime_data, &en_sb_port_binding, NULL);
+    engine_add_input(&en_runtime_data, &en_sb_gateway_chassis, NULL);
+
     engine_init(&en_flow_output);
 
     ofctrl_init(&ed_flow_output.group_table,
@@ -925,9 +944,11 @@ main(int argc, char *argv[])
                              &pending_pkt);
 
     uint64_t engine_run_id = 0;
+    uint64_t old_engine_run_id = 0;
     /* Main loop. */
     exiting = false;
     while (!exiting) {
+        old_engine_run_id = engine_run_id;
         /* Check OVN SB database. */
         char *new_ovnsb_remote = get_ovnsb_remote(ovs_idl_loop.idl);
         if (strcmp(ovnsb_remote, new_ovnsb_remote)) {
@@ -973,10 +994,13 @@ main(int argc, char *argv[])
                             &ed_runtime_data.local_datapaths,
                             &ed_runtime_data.chassis_index);
                 }
-                ofctrl_put(&ed_flow_output.flow_table,
-                           &ed_runtime_data.pending_ct_zones,
-                           get_nb_cfg(ctx.ovnsb_idl));
+                if (en_flow_output.changed) {
+                    ofctrl_put(&ed_flow_output.flow_table,
+                               &ed_runtime_data.pending_ct_zones,
+                               get_nb_cfg(ctx.ovnsb_idl));
+                }
             }
+
             pinctrl_run(&ctx, br_int, chassis, &ed_runtime_data.chassis_index,
                         &ed_runtime_data.local_datapaths,
                         &ed_runtime_data.active_tunnels);
@@ -985,6 +1009,14 @@ main(int argc, char *argv[])
                                &ed_runtime_data.local_lports,
                                &ed_runtime_data.local_datapaths);
 
+        }
+        if (old_engine_run_id == engine_run_id) {
+            VLOG_DBG("engine did not run, force recompute next time: "
+                     "br_int %p, chassis %p", br_int, chassis);
+            engine_set_force_recompute(true);
+            poll_immediate_wake();
+        } else {
+            engine_set_force_recompute(false);
         }
 
         if (ctx.ovnsb_idl_txn) {
