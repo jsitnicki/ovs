@@ -589,6 +589,20 @@ create_ovnsb_indexes(struct ovsdb_idl *ovnsb_idl)
                                OVSDB_INDEX_ASC, NULL);
 }
 
+ENGINE_FUNC_SB(chassis);
+ENGINE_FUNC_SB(encap);
+ENGINE_FUNC_SB(address_set);
+ENGINE_FUNC_SB(port_group);
+ENGINE_FUNC_SB(multicast_group);
+ENGINE_FUNC_SB(datapath_binding);
+ENGINE_FUNC_SB(port_binding);
+ENGINE_FUNC_SB(mac_binding);
+ENGINE_FUNC_SB(logical_flow);
+ENGINE_FUNC_SB(dhcp_options);
+ENGINE_FUNC_SB(dhcpv6_options);
+ENGINE_FUNC_SB(dns);
+ENGINE_FUNC_SB(gateway_chassis);
+
 struct ed_type_runtime_data {
     struct chassis_index chassis_index;
 
@@ -867,10 +881,38 @@ main(int argc, char *argv[])
     struct ed_type_runtime_data ed_runtime_data;
     struct ed_type_flow_output ed_flow_output;
 
+    ENGINE_NODE_SB(chassis, "chassis", &ctx);
+    ENGINE_NODE_SB(encap, "encap", &ctx);
+    ENGINE_NODE_SB(address_set, "address_set", &ctx);
+    ENGINE_NODE_SB(port_group, "port_group", &ctx);
+    ENGINE_NODE_SB(multicast_group, "multicast_group", &ctx);
+    ENGINE_NODE_SB(datapath_binding, "datapath_binding", &ctx);
+    ENGINE_NODE_SB(port_binding, "port_binding", &ctx);
+    ENGINE_NODE_SB(mac_binding, "mac_binding", &ctx);
+    ENGINE_NODE_SB(logical_flow, "logical_flow", &ctx);
+    ENGINE_NODE_SB(dhcp_options, "dhcp_options", &ctx);
+    ENGINE_NODE_SB(dhcpv6_options, "dhcpv6_options", &ctx);
+    ENGINE_NODE_SB(dns, "dns", &ctx);
+    ENGINE_NODE_SB(gateway_chassis, "gateway_chassis", &ctx);
+
     ENGINE_NODE(runtime_data, "runtime_data", &ctx);
     ENGINE_NODE(flow_output, "flow_output", &ctx);
-
     engine_add_input(&en_flow_output, &en_runtime_data, NULL);
+
+    engine_add_input(&en_flow_output, &en_sb_chassis, NULL);
+    engine_add_input(&en_flow_output, &en_sb_encap, NULL);
+    engine_add_input(&en_flow_output, &en_sb_address_set, NULL);
+    engine_add_input(&en_flow_output, &en_sb_port_group, NULL);
+    engine_add_input(&en_flow_output, &en_sb_multicast_group, NULL);
+    engine_add_input(&en_flow_output, &en_sb_datapath_binding, NULL);
+    engine_add_input(&en_flow_output, &en_sb_port_binding, NULL);
+    engine_add_input(&en_flow_output, &en_sb_mac_binding, NULL);
+    engine_add_input(&en_flow_output, &en_sb_logical_flow, NULL);
+    engine_add_input(&en_flow_output, &en_sb_dhcp_options, NULL);
+    engine_add_input(&en_flow_output, &en_sb_dhcpv6_options, NULL);
+    engine_add_input(&en_flow_output, &en_sb_dns, NULL);
+    engine_add_input(&en_flow_output, &en_sb_gateway_chassis, NULL);
+
     engine_init(&en_flow_output);
 
     ofctrl_init(&ed_flow_output.group_table,
