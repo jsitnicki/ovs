@@ -60,6 +60,7 @@
 #include "timeval.h"
 #include "timer.h"
 #include "stopwatch.h"
+#include "ovn/lib/inc-proc-eng.h"
 
 VLOG_DEFINE_THIS_MODULE(main);
 
@@ -208,14 +209,25 @@ update_sb_monitors(struct ovsdb_idl *ovnsb_idl,
     ovsdb_idl_condition_destroy(&dns);
 }
 
+static const char *
+br_int_name(const struct ovsrec_open_vswitch *cfg)
+{
+    return smap_get_def(&cfg->external_ids, "ovn-bridge", DEFAULT_BRIDGE_NAME);
+}
+
 static const struct ovsrec_bridge *
-create_br_int(struct controller_ctx *ctx,
-              const struct ovsrec_open_vswitch *cfg,
-              const char *bridge_name)
+create_br_int(struct controller_ctx *ctx)
 {
     if (!ctx->ovs_idl_txn) {
         return NULL;
     }
+
+    const struct ovsrec_open_vswitch *cfg;
+    cfg = ovsrec_open_vswitch_first(ctx->ovs_idl);
+    if (!cfg) {
+        return NULL;
+    }
+    const char *bridge_name = br_int_name(cfg);
 
     ovsdb_idl_txn_add_comment(ctx->ovs_idl_txn,
             "ovn-controller: creating integration bridge '%s'", bridge_name);
@@ -259,15 +271,7 @@ get_br_int(struct controller_ctx *ctx)
         return NULL;
     }
 
-    const char *br_int_name = smap_get_def(&cfg->external_ids, "ovn-bridge",
-                                           DEFAULT_BRIDGE_NAME);
-
-    const struct ovsrec_bridge *br;
-    br = get_bridge(ctx->ovs_idl, br_int_name);
-    if (!br) {
-        return create_br_int(ctx, cfg, br_int_name);
-    }
-    return br;
+    return get_bridge(ctx->ovs_idl, br_int_name(cfg));
 }
 
 static const char *
@@ -476,11 +480,8 @@ restore_ct_zones(struct ovsdb_idl *ovs_idl,
         return;
     }
 
-    const char *br_int_name = smap_get_def(&cfg->external_ids, "ovn-bridge",
-                                           DEFAULT_BRIDGE_NAME);
-
     const struct ovsrec_bridge *br_int;
-    br_int = get_bridge(ovs_idl, br_int_name);
+    br_int = get_bridge(ovs_idl, br_int_name(cfg));
     if (!br_int) {
         /* If the integration bridge hasn't been defined, assume that
          * any existing ct-zone definitions aren't valid. */
@@ -588,6 +589,227 @@ create_ovnsb_indexes(struct ovsdb_idl *ovnsb_idl)
                                OVSDB_INDEX_ASC, NULL);
 }
 
+struct ed_type_runtime_data {
+    struct chassis_index chassis_index;
+
+    /* Contains "struct local_datapath" nodes. */
+    struct hmap local_datapaths;
+
+    /* Contains the name of each logical port resident on the local
+     * hypervisor.  These logical ports include the VIFs (and their child
+     * logical ports, if any) that belong to VMs running on the hypervisor,
+     * l2gateway ports for which options:l2gateway-chassis designates the
+     * local hypervisor, and localnet ports. */
+    struct sset local_lports;
+
+    /* Contains the same ports as local_lports, but in the format:
+     * <datapath-tunnel-key>_<port-tunnel-key> */
+    struct sset local_lport_ids;
+    struct sset active_tunnels;
+    struct shash addr_sets;
+    struct shash port_groups;
+
+    /* connection tracking zones. */
+    unsigned long ct_zone_bitmap[BITMAP_N_LONGS(MAX_CT_ZONES)];
+    struct shash pending_ct_zones;
+    struct simap ct_zones;
+};
+
+static void
+en_runtime_data_init(struct engine_node *node)
+{
+    struct controller_ctx *ctx = (struct controller_ctx *)node->context;
+    struct ed_type_runtime_data *data =
+        (struct ed_type_runtime_data *)node->data;
+    hmap_init(&data->local_datapaths);
+    sset_init(&data->local_lports);
+    sset_init(&data->local_lport_ids);
+    sset_init(&data->active_tunnels);
+    shash_init(&data->addr_sets);
+    shash_init(&data->port_groups);
+    shash_init(&data->pending_ct_zones);
+    simap_init(&data->ct_zones);
+
+    /* Initialize connection tracking zones. */
+    memset(data->ct_zone_bitmap, 0, sizeof data->ct_zone_bitmap);
+    bitmap_set1(data->ct_zone_bitmap, 0); /* Zone 0 is reserved. */
+    restore_ct_zones(ctx->ovs_idl, &data->ct_zones, data->ct_zone_bitmap);
+}
+
+static void
+en_runtime_data_cleanup(struct engine_node *node)
+{
+    struct ed_type_runtime_data *data =
+        (struct ed_type_runtime_data *)node->data;
+
+    expr_const_sets_destroy(&data->addr_sets);
+    shash_destroy(&data->addr_sets);
+    expr_const_sets_destroy(&data->port_groups);
+    shash_destroy(&data->port_groups);
+
+    chassis_index_destroy(&data->chassis_index);
+
+    sset_destroy(&data->local_lports);
+    sset_destroy(&data->local_lport_ids);
+    sset_destroy(&data->active_tunnels);
+    struct local_datapath *cur_node, *next_node;
+    HMAP_FOR_EACH_SAFE (cur_node, next_node, hmap_node,
+                        &data->local_datapaths) {
+        free(cur_node->peer_dps);
+        hmap_remove(&data->local_datapaths, &cur_node->hmap_node);
+        free(cur_node);
+    }
+    hmap_destroy(&data->local_datapaths);
+
+    simap_destroy(&data->ct_zones);
+    shash_destroy(&data->pending_ct_zones);
+}
+
+static void
+en_runtime_data_run(struct engine_node *node)
+{
+    struct controller_ctx *ctx = (struct controller_ctx *)node->context;
+    struct ed_type_runtime_data *data =
+        (struct ed_type_runtime_data *)node->data;
+    struct hmap *local_datapaths = &data->local_datapaths;
+    struct sset *local_lports = &data->local_lports;
+    struct sset *local_lport_ids = &data->local_lport_ids;
+    struct sset *active_tunnels = &data->active_tunnels;
+    struct chassis_index *chassis_index = &data->chassis_index;
+    struct shash *addr_sets = &data->addr_sets;
+    struct shash *port_groups = &data->port_groups;
+    unsigned long *ct_zone_bitmap = data->ct_zone_bitmap;
+    struct shash *pending_ct_zones = &data->pending_ct_zones;
+    struct simap *ct_zones = &data->ct_zones;
+
+    static bool first_run = true;
+    if (first_run) {
+        /* don't cleanup since there is no data yet */
+        first_run = false;
+    } else {
+        struct local_datapath *cur_node, *next_node;
+        HMAP_FOR_EACH_SAFE (cur_node, next_node, hmap_node, local_datapaths) {
+            free(cur_node->peer_dps);
+            hmap_remove(local_datapaths, &cur_node->hmap_node);
+            free(cur_node);
+        }
+        hmap_clear(local_datapaths);
+        sset_destroy(local_lports);
+        sset_destroy(local_lport_ids);
+        sset_destroy(active_tunnels);
+        chassis_index_destroy(chassis_index);
+        expr_const_sets_destroy(addr_sets);
+        expr_const_sets_destroy(port_groups);
+        sset_init(local_lports);
+        sset_init(local_lport_ids);
+        sset_init(active_tunnels);
+    }
+
+    const char *chassis_id = get_chassis_id(ctx->ovs_idl);
+    const struct ovsrec_bridge *br_int = get_br_int(ctx);
+
+    ovs_assert(br_int && chassis_id);
+    const struct sbrec_chassis *chassis = NULL;
+    chassis = get_chassis(ctx->ovnsb_idl, chassis_id);
+    ovs_assert(chassis);
+
+    chassis_index_init(chassis_index, ctx->ovnsb_idl);
+    bfd_calculate_active_tunnels(br_int, active_tunnels);
+    binding_run(ctx, br_int, chassis,
+                chassis_index, active_tunnels, local_datapaths,
+                local_lports, local_lport_ids);
+
+    addr_sets_init(ctx, addr_sets);
+    port_groups_init(ctx, port_groups);
+    update_ct_zones(local_lports, local_datapaths, ct_zones,
+                    ct_zone_bitmap, pending_ct_zones);
+
+    node->changed = true;
+}
+
+struct ed_type_flow_output {
+    /* desired flows */
+    struct hmap flow_table;
+    /* group ids for load balancing */
+    struct ovn_extend_table group_table;
+    /* meter ids for QoS */
+    struct ovn_extend_table meter_table;
+};
+
+static void
+en_flow_output_init(struct engine_node *node)
+{
+    struct ed_type_flow_output *data =
+        (struct ed_type_flow_output *)node->data;
+    hmap_init(&data->flow_table);
+    ovn_extend_table_init(&data->group_table);
+    ovn_extend_table_init(&data->meter_table);
+}
+
+static void
+en_flow_output_cleanup(struct engine_node *node)
+{
+    struct ed_type_flow_output *data =
+        (struct ed_type_flow_output *)node->data;
+    hmap_destroy(&data->flow_table);
+    ovn_extend_table_destroy(&data->group_table);
+    ovn_extend_table_destroy(&data->meter_table);
+}
+
+static void
+en_flow_output_run(struct engine_node *node)
+{
+    struct controller_ctx *ctx = (struct controller_ctx *)node->context;
+    struct ed_type_runtime_data *rt_data =
+        (struct ed_type_runtime_data *)engine_get_input(
+            "runtime_data", node)->data;
+    struct hmap *local_datapaths = &rt_data->local_datapaths;
+    struct sset *local_lports = &rt_data->local_lports;
+    struct sset *local_lport_ids = &rt_data->local_lport_ids;
+    struct sset *active_tunnels = &rt_data->active_tunnels;
+    struct chassis_index *chassis_index = &rt_data->chassis_index;
+    struct shash *addr_sets = &rt_data->addr_sets;
+    struct shash *port_groups = &rt_data->port_groups;
+    struct simap *ct_zones = &rt_data->ct_zones;
+
+    const struct ovsrec_bridge *br_int = get_br_int(ctx);
+
+    const char *chassis_id = get_chassis_id(ctx->ovs_idl);
+
+    const struct sbrec_chassis *chassis = NULL;
+    if (chassis_id) {
+        chassis = get_chassis(ctx->ovnsb_idl, chassis_id);
+    }
+
+    ovs_assert(br_int && chassis);
+
+    struct ed_type_flow_output *fo =
+        (struct ed_type_flow_output *)node->data;
+    struct hmap *flow_table = &fo->flow_table;
+    struct ovn_extend_table *group_table = &fo->group_table;
+    struct ovn_extend_table *meter_table = &fo->meter_table;
+
+    static bool first_run = true;
+    if (first_run) {
+        first_run = false;
+    } else {
+        hmap_clear(flow_table);
+    }
+
+    lflow_run(ctx, chassis,
+              chassis_index, local_datapaths, group_table,
+              meter_table, addr_sets, port_groups, flow_table,
+              active_tunnels, local_lport_ids);
+
+    enum mf_field_id mff_ovn_geneve = ofctrl_get_mf_field_id();
+
+    physical_run(ctx, mff_ovn_geneve,
+                 br_int, chassis, ct_zones,
+                 flow_table, local_datapaths, local_lports,
+                 chassis_index, active_tunnels);
+    node->changed = true;
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -609,17 +831,9 @@ main(int argc, char *argv[])
     }
     unixctl_command_register("exit", "", 0, 0, ovn_controller_exit, &exiting);
 
-    /* Initialize group ids for loadbalancing. */
-    struct ovn_extend_table group_table;
-    ovn_extend_table_init(&group_table);
-
-    /* Initialize meter ids for QoS. */
-    struct ovn_extend_table meter_table;
-    ovn_extend_table_init(&meter_table);
 
     daemonize_complete();
 
-    ofctrl_init(&group_table, &meter_table);
     pinctrl_init();
     lflow_init();
 
@@ -643,21 +857,32 @@ main(int argc, char *argv[])
     update_sb_monitors(ovnsb_idl_loop.idl, NULL, NULL, NULL);
     ovsdb_idl_get_initial_snapshot(ovnsb_idl_loop.idl);
 
-    /* Initialize connection tracking zones. */
-    struct simap ct_zones = SIMAP_INITIALIZER(&ct_zones);
-    struct shash pending_ct_zones = SHASH_INITIALIZER(&pending_ct_zones);
-    unsigned long ct_zone_bitmap[BITMAP_N_LONGS(MAX_CT_ZONES)];
-    memset(ct_zone_bitmap, 0, sizeof ct_zone_bitmap);
-    bitmap_set1(ct_zone_bitmap, 0); /* Zone 0 is reserved. */
-    restore_ct_zones(ovs_idl_loop.idl, &ct_zones, ct_zone_bitmap);
+
+    stopwatch_create(CONTROLLER_LOOP_STOPWATCH_NAME, SW_MS);
+
+    struct controller_ctx ctx = {
+        .ovs_idl = ovs_idl_loop.idl,
+        .ovnsb_idl = ovnsb_idl_loop.idl
+    };
+    struct ed_type_runtime_data ed_runtime_data;
+    struct ed_type_flow_output ed_flow_output;
+
+    ENGINE_NODE(runtime_data, "runtime_data", &ctx);
+    ENGINE_NODE(flow_output, "flow_output", &ctx);
+
+    engine_add_input(&en_flow_output, &en_runtime_data, NULL);
+    engine_init(&en_flow_output);
+
+    ofctrl_init(&ed_flow_output.group_table,
+                &ed_flow_output.meter_table);
     unixctl_command_register("ct-zone-list", "", 0, 0,
-                             ct_zone_list, &ct_zones);
+                             ct_zone_list, &ed_runtime_data.ct_zones);
 
     struct pending_pkt pending_pkt = { .conn = NULL };
     unixctl_command_register("inject-pkt", "MICROFLOW", 1, 1, inject_pkt,
                              &pending_pkt);
 
-    stopwatch_create(CONTROLLER_LOOP_STOPWATCH_NAME, SW_MS);
+    uint64_t engine_run_id = 0;
     /* Main loop. */
     exiting = false;
     while (!exiting) {
@@ -671,144 +896,81 @@ main(int argc, char *argv[])
             free(new_ovnsb_remote);
         }
 
-        struct controller_ctx ctx = {
-            .ovs_idl = ovs_idl_loop.idl,
-            .ovs_idl_txn = ovsdb_idl_loop_run(&ovs_idl_loop),
-            .ovnsb_idl = ovnsb_idl_loop.idl,
-            .ovnsb_idl_txn = ovsdb_idl_loop_run(&ovnsb_idl_loop),
-        };
+        ctx.ovs_idl = ovs_idl_loop.idl;
+        ctx.ovs_idl_txn = ovsdb_idl_loop_run(&ovs_idl_loop);
+        ctx.ovnsb_idl = ovnsb_idl_loop.idl;
+        ctx.ovnsb_idl_txn = ovsdb_idl_loop_run(&ovnsb_idl_loop);
 
         update_probe_interval(&ctx, ovnsb_remote);
 
         update_ssl_config(ctx.ovs_idl);
 
-        /* Contains "struct local_datapath" nodes. */
-        struct hmap local_datapaths = HMAP_INITIALIZER(&local_datapaths);
-
-        /* Contains the name of each logical port resident on the local
-         * hypervisor.  These logical ports include the VIFs (and their child
-         * logical ports, if any) that belong to VMs running on the hypervisor,
-         * l2gateway ports for which options:l2gateway-chassis designates the
-         * local hypervisor, and localnet ports. */
-        struct sset local_lports = SSET_INITIALIZER(&local_lports);
-        /* Contains the same ports as local_lports, but in the format:
-         * <datapath-tunnel-key>_<port-tunnel-key> */
-        struct sset local_lport_ids = SSET_INITIALIZER(&local_lport_ids);
-        struct sset active_tunnels = SSET_INITIALIZER(&active_tunnels);
-
         const struct ovsrec_bridge *br_int = get_br_int(&ctx);
-        const char *chassis_id = get_chassis_id(ctx.ovs_idl);
-
-        struct chassis_index chassis_index;
-
-        chassis_index_init(&chassis_index, ctx.ovnsb_idl);
-
-        const struct sbrec_chassis *chassis = NULL;
-        if (chassis_id) {
-            chassis = chassis_run(&ctx, chassis_id, br_int);
-            encaps_run(&ctx, br_int, chassis_id);
-            bfd_calculate_active_tunnels(br_int, &active_tunnels);
-            binding_run(&ctx, br_int, chassis,
-                        &chassis_index, &active_tunnels, &local_datapaths,
-                        &local_lports, &local_lport_ids);
+        if (!br_int) {
+            br_int = create_br_int(&ctx);
         }
+        const char *chassis_id = get_chassis_id(ctx.ovs_idl);
+        const struct sbrec_chassis *chassis
+            = chassis_id ? chassis_run(&ctx, chassis_id, br_int) : NULL;
+
         if (br_int && chassis) {
-            struct shash addr_sets = SHASH_INITIALIZER(&addr_sets);
-            addr_sets_init(&ctx, &addr_sets);
-            struct shash port_groups = SHASH_INITIALIZER(&port_groups);
-            port_groups_init(&ctx, &port_groups);
-
+            ofctrl_run(br_int, &ed_runtime_data.pending_ct_zones);
             patch_run(&ctx, br_int, chassis);
+            encaps_run(&ctx, br_int, chassis_id);
 
-            enum mf_field_id mff_ovn_geneve = ofctrl_run(br_int,
-                                                         &pending_ct_zones);
+            if (ofctrl_can_put()) {
+                stopwatch_start(CONTROLLER_LOOP_STOPWATCH_NAME,
+                                time_msec());
+                engine_run(&en_flow_output, ++engine_run_id);
+                stopwatch_stop(CONTROLLER_LOOP_STOPWATCH_NAME,
+                               time_msec());
 
-            pinctrl_run(&ctx, br_int, chassis, &chassis_index,
-                        &local_datapaths, &active_tunnels);
-            update_ct_zones(&local_lports, &local_datapaths, &ct_zones,
-                            ct_zone_bitmap, &pending_ct_zones);
-            if (ctx.ovs_idl_txn) {
-                if (ofctrl_can_put()) {
-                    stopwatch_start(CONTROLLER_LOOP_STOPWATCH_NAME,
-                                    time_msec());
-
-                    commit_ct_zones(br_int, &pending_ct_zones);
-
-                    struct hmap flow_table = HMAP_INITIALIZER(&flow_table);
-                    lflow_run(&ctx, chassis,
-                              &chassis_index, &local_datapaths, &group_table,
-                              &meter_table, &addr_sets, &port_groups,
-                              &flow_table, &active_tunnels, &local_lport_ids);
-
-                    if (chassis_id) {
-                        bfd_run(&ctx, br_int, chassis, &local_datapaths,
-                                &chassis_index);
-                    }
-                    physical_run(&ctx, mff_ovn_geneve,
-                                 br_int, chassis, &ct_zones,
-                                 &flow_table, &local_datapaths, &local_lports,
-                                 &chassis_index, &active_tunnels);
-
-                    stopwatch_stop(CONTROLLER_LOOP_STOPWATCH_NAME,
-                                   time_msec());
-
-                    ofctrl_put(&flow_table, &pending_ct_zones,
-                               get_nb_cfg(ctx.ovnsb_idl));
-
-                    hmap_destroy(&flow_table);
+                if (ctx.ovs_idl_txn) {
+                    commit_ct_zones(br_int, &ed_runtime_data.pending_ct_zones);
+                    bfd_run(&ctx, br_int, chassis,
+                            &ed_runtime_data.local_datapaths,
+                            &ed_runtime_data.chassis_index);
                 }
-                if (ctx.ovnsb_idl_txn) {
-                    int64_t cur_cfg = ofctrl_get_cur_cfg();
-                    if (cur_cfg && cur_cfg != chassis->nb_cfg) {
-                        sbrec_chassis_set_nb_cfg(chassis, cur_cfg);
-                    }
-                }
+                ofctrl_put(&ed_flow_output.flow_table,
+                           &ed_runtime_data.pending_ct_zones,
+                           get_nb_cfg(ctx.ovnsb_idl));
             }
+            pinctrl_run(&ctx, br_int, chassis, &ed_runtime_data.chassis_index,
+                        &ed_runtime_data.local_datapaths,
+                        &ed_runtime_data.active_tunnels);
 
-            if (pending_pkt.conn) {
+            update_sb_monitors(ctx.ovnsb_idl, chassis,
+                               &ed_runtime_data.local_lports,
+                               &ed_runtime_data.local_datapaths);
+
+        }
+
+        if (ctx.ovnsb_idl_txn) {
+            int64_t cur_cfg = ofctrl_get_cur_cfg();
+            if (cur_cfg && cur_cfg != chassis->nb_cfg) {
+                sbrec_chassis_set_nb_cfg(chassis, cur_cfg);
+            }
+        }
+
+
+        if (pending_pkt.conn) {
+            if (br_int && chassis) {
                 char *error = ofctrl_inject_pkt(br_int, pending_pkt.flow_s,
-                                                &port_groups, &addr_sets);
+                                                &ed_runtime_data.port_groups,
+                                                &ed_runtime_data.addr_sets);
                 if (error) {
                     unixctl_command_reply_error(pending_pkt.conn, error);
                     free(error);
                 } else {
                     unixctl_command_reply(pending_pkt.conn, NULL);
                 }
-                pending_pkt.conn = NULL;
-                free(pending_pkt.flow_s);
+            } else {
+                unixctl_command_reply_error(pending_pkt.conn,
+                                            "ovn-controller not ready.");
             }
-
-            update_sb_monitors(ctx.ovnsb_idl, chassis,
-                               &local_lports, &local_datapaths);
-
-            expr_const_sets_destroy(&addr_sets);
-            shash_destroy(&addr_sets);
-            expr_const_sets_destroy(&port_groups);
-            shash_destroy(&port_groups);
-        }
-
-        /* If we haven't handled the pending packet insertion
-         * request, the system is not ready. */
-        if (pending_pkt.conn) {
-            unixctl_command_reply_error(pending_pkt.conn,
-                                        "ovn-controller not ready.");
             pending_pkt.conn = NULL;
             free(pending_pkt.flow_s);
         }
-
-        chassis_index_destroy(&chassis_index);
-
-        sset_destroy(&local_lports);
-        sset_destroy(&local_lport_ids);
-        sset_destroy(&active_tunnels);
-
-        struct local_datapath *cur_node, *next_node;
-        HMAP_FOR_EACH_SAFE (cur_node, next_node, hmap_node, &local_datapaths) {
-            free(cur_node->peer_dps);
-            hmap_remove(&local_datapaths, &cur_node->hmap_node);
-            free(cur_node);
-        }
-        hmap_destroy(&local_datapaths);
 
         unixctl_server_run(unixctl);
 
@@ -826,10 +988,11 @@ main(int argc, char *argv[])
 
         if (ovsdb_idl_loop_commit_and_wait(&ovs_idl_loop) == 1) {
             struct shash_node *iter, *iter_next;
-            SHASH_FOR_EACH_SAFE(iter, iter_next, &pending_ct_zones) {
+            SHASH_FOR_EACH_SAFE (iter, iter_next,
+                                 &ed_runtime_data.pending_ct_zones) {
                 struct ct_zone_pending_entry *ctzpe = iter->data;
                 if (ctzpe->state == CT_ZONE_DB_SENT) {
-                    shash_delete(&pending_ct_zones, iter);
+                    shash_delete(&ed_runtime_data.pending_ct_zones, iter);
                     free(ctzpe);
                 }
             }
@@ -843,26 +1006,28 @@ main(int argc, char *argv[])
         }
     }
 
+    engine_cleanup(&en_flow_output);
+
     /* It's time to exit.  Clean up the databases. */
     bool done = false;
     while (!done) {
-        struct controller_ctx ctx = {
+        struct controller_ctx ctx_ = {
             .ovs_idl = ovs_idl_loop.idl,
             .ovs_idl_txn = ovsdb_idl_loop_run(&ovs_idl_loop),
             .ovnsb_idl = ovnsb_idl_loop.idl,
             .ovnsb_idl_txn = ovsdb_idl_loop_run(&ovnsb_idl_loop),
         };
 
-        const struct ovsrec_bridge *br_int = get_br_int(&ctx);
-        const char *chassis_id = get_chassis_id(ctx.ovs_idl);
+        const struct ovsrec_bridge *br_int = get_br_int(&ctx_);
+        const char *chassis_id = get_chassis_id(ctx_.ovs_idl);
         const struct sbrec_chassis *chassis
-            = chassis_id ? get_chassis(ctx.ovnsb_idl, chassis_id) : NULL;
+            = chassis_id ? get_chassis(ctx_.ovnsb_idl, chassis_id) : NULL;
 
         /* Run all of the cleanup functions, even if one of them returns false.
          * We're done if all of them return true. */
-        done = binding_cleanup(&ctx, chassis);
-        done = chassis_cleanup(&ctx, chassis) && done;
-        done = encaps_cleanup(&ctx, br_int) && done;
+        done = binding_cleanup(&ctx_, chassis);
+        done = chassis_cleanup(&ctx_, chassis) && done;
+        done = encaps_cleanup(&ctx_, br_int) && done;
         if (done) {
             poll_immediate_wake();
         }
@@ -876,12 +1041,6 @@ main(int argc, char *argv[])
     lflow_destroy();
     ofctrl_destroy();
     pinctrl_destroy();
-
-    simap_destroy(&ct_zones);
-    shash_destroy(&pending_ct_zones);
-
-    ovn_extend_table_destroy(&group_table);
-    ovn_extend_table_destroy(&meter_table);
 
     ovsdb_idl_loop_destroy(&ovs_idl_loop);
     ovsdb_idl_loop_destroy(&ovnsb_idl_loop);
