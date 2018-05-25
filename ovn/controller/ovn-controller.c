@@ -1075,6 +1075,76 @@ flow_output_sb_multicast_group_handler(struct engine_node *node)
 
 }
 
+static bool
+flow_output_addr_sets_handler(struct engine_node *node)
+{
+    struct controller_ctx *ctx = (struct controller_ctx *)node->context;
+    struct ed_type_runtime_data *data =
+        (struct ed_type_runtime_data *)engine_get_input(
+                "runtime_data", node)->data;
+    struct hmap *local_datapaths = &data->local_datapaths;
+    struct sset *local_lport_ids = &data->local_lport_ids;
+    struct sset *active_tunnels = &data->active_tunnels;
+    struct chassis_index *chassis_index = &data->chassis_index;
+    struct shash *port_groups = &data->port_groups;
+    struct ed_type_addr_sets *as_data =
+        (struct ed_type_addr_sets *)engine_get_input("addr_sets", node)->data;
+    struct shash *addr_sets = &as_data->addr_sets;
+    const struct ovsrec_bridge *br_int = get_br_int(ctx);
+    const char *chassis_id = get_chassis_id(ctx->ovs_idl);
+
+    const struct sbrec_chassis *chassis = NULL;
+    if (chassis_id) {
+        chassis = get_chassis(ctx->ovnsb_idl, chassis_id);
+    }
+
+    ovs_assert(br_int && chassis);
+
+    struct ed_type_flow_output *fo =
+        (struct ed_type_flow_output *)node->data;
+    struct ovn_desired_flow_table *flow_table = &fo->flow_table;
+    struct ovn_extend_table *group_table = &fo->group_table;
+    struct ovn_extend_table *meter_table = &fo->meter_table;
+    uint32_t *conj_id_ofs = &fo->conj_id_ofs;
+    struct lflow_resource_ref *lfrr = &fo->lflow_resource_ref;
+
+    bool changed;
+    const char *as;
+
+    SSET_FOR_EACH (as, &as_data->deleted) {
+        if (!lflow_handle_changed_ref(flow_table, lfrr, REF_TYPE_ADDRSET,
+                      as, ctx, chassis, chassis_index, local_datapaths,
+                      group_table, meter_table, addr_sets, port_groups,
+                      active_tunnels, local_lport_ids, conj_id_ofs,
+                      &changed)) {
+            return false;
+        }
+        node->changed = changed || node->changed;
+    }
+    SSET_FOR_EACH (as, &as_data->updated) {
+        if (!lflow_handle_changed_ref(flow_table, lfrr, REF_TYPE_ADDRSET,
+                      as, ctx, chassis, chassis_index, local_datapaths,
+                      group_table, meter_table, addr_sets, port_groups,
+                      active_tunnels, local_lport_ids, conj_id_ofs,
+                      &changed)) {
+            return false;
+        }
+        node->changed = changed || node->changed;
+    }
+    SSET_FOR_EACH (as, &as_data->new) {
+        if (!lflow_handle_changed_ref(flow_table, lfrr, REF_TYPE_ADDRSET,
+                      as, ctx, chassis, chassis_index, local_datapaths,
+                      group_table, meter_table, addr_sets, port_groups,
+                      active_tunnels, local_lport_ids, conj_id_ofs,
+                      &changed)) {
+            return false;
+        }
+        node->changed = changed || node->changed;
+    }
+
+    return true;
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -1156,7 +1226,7 @@ main(int argc, char *argv[])
 
     engine_add_input(&en_addr_sets, &en_sb_address_set, NULL);
 
-    engine_add_input(&en_flow_output, &en_addr_sets, NULL);
+    engine_add_input(&en_flow_output, &en_addr_sets, flow_output_addr_sets_handler);
     engine_add_input(&en_flow_output, &en_runtime_data, NULL);
 
     engine_add_input(&en_flow_output, &en_ovs_port, NULL);

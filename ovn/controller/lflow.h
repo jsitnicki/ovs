@@ -139,6 +139,22 @@ bool lflow_handle_changed_flows(struct ovn_desired_flow_table *,
                                 struct sset *active_tunnels,
                                 struct sset *local_lport_ids,
                                 uint32_t *conj_id_ofs);
+bool lflow_handle_changed_ref(struct ovn_desired_flow_table *,
+                              struct lflow_resource_ref *,
+                              enum ref_type,
+                              const char *ref_name,
+                              struct controller_ctx *ctx,
+                              const struct sbrec_chassis *chassis,
+                              const struct chassis_index *chassis_index,
+                              const struct hmap *local_datapaths,
+                              struct ovn_extend_table *group_table,
+                              struct ovn_extend_table *meter_table,
+                              const struct shash *addr_sets,
+                              const struct shash *port_groups,
+                              struct sset *active_tunnels,
+                              struct sset *local_lport_ids,
+                              uint32_t *conj_id_ofs,
+                              bool *changed);
 void lflow_destroy(void);
 
 #endif /* ovn/lflow.h */
