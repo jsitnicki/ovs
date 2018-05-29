@@ -1,0 +1,287 @@
+#
+# Tests targeting performance of OVN components.
+#
+
+m4_divert_push([PREPARE_TESTS])
+
+# vec_sub VEC_A VEC_B
+#
+# Subtracts two vectors:
+#
+#     VEC_A = [a1, a2, ...]
+#     VEC_B = [b1, b2, ...]
+#     OUT = [(a1 - b1), (a2 - b2), ...]
+#
+# VEC_A and VEC_B must be lists of values separated by a character from $IFS.
+vec_sub() {
+    local a b i j
+
+    i=0
+    for a in $1; do
+        j=0
+        for b in $2; do
+            if test $i -eq $j; then
+                expr $a - $b
+                break
+            fi
+            j=`expr $j + 1`
+        done
+        i=`expr $i + 1`
+    done
+}
+
+# vec_sum VEC
+#
+# Sums elements of a vector:
+#
+#     VEC = [e1, e2, ...]
+#     OUT = e1 + e2 + ...
+#
+# VEC must be a list of values separated by a character from $IFS.
+vec_sum() {
+    local s=0
+
+    for a in $1; do
+        s=`expr $s + $a`
+    done
+    echo $s
+}
+
+# read_counters SANDBOXES APPLICATION COUNTER
+#
+# Prints out the coverage COUNTER for the APPLICATION in each of the SANDBOXES.
+#
+# SANDBOXES must be a list of strings separated by a character from $IFS.
+read_counters() {
+    local sims="$1" app="$2" counter="$3"
+
+    for sim in $sims; do
+        as $sim ovs-appctl -t "$app" coverage/read-count "$counter" || return 1
+    done
+}
+
+# counter_delta_per_sim SANDBOXES APPLICATION COUNTER COMMAND
+#
+# Runs the COMMAND and reports the COUNTER change registered during the command
+# run for the given APPLICATION in each of the SANDBOXES.
+counter_delta_per_sim() {
+    local sims="$1" app="$2" counter="$3" cmd="$4"
+    local before after diff
+
+    before=$(read_counters "$sims" "$app" "$counter") || return 1
+    $cmd || return 1
+    after=$(read_counters "$sims" "$app" "$counter") || return 1
+
+    vec_sub "$after" "$before"
+}
+
+# counter_delta_per_sim SANDBOXES APPLICATION COUNTER COMMAND
+#
+# Same as counter_delta_per_sim but reports the sum of COUNTERs across all
+# SANDBOXES.
+counter_delta_in_total() {
+    vec_sum "$(counter_delta_per_sim "$@")"
+}
+
+m4_divert_pop([PREPARE_TESTS])
+
+# CHECK_COUNTER_DELTA_IS_ZERO SANDBOXES APPLICATION COUNTER COMMAND
+#
+# Runs the COMMAND and checks if the COUNTER value for the APPLICATION in all of
+# the SANDBOXES did not change.
+m4_define([CHECK_COUNTER_DELTA_IS_ZERO],[
+    count=`counter_delta_in_total "$1" "$2" "$3" "$4"`
+    rc=$?
+    AT_CHECK([test $rc -eq 0 -a $count -eq 0])
+])
+
+# CHECK_COUNTER_DELTA_IS_NOT_ZERO SANDBOXES APPLICATION COUNTER COMMAND
+#
+# Runs the COMMAND and checks if there COUNTER value for the APPLICATION in
+# any of the SANDBOXES has changed.
+m4_define([CHECK_COUNTER_DELTA_IS_NOT_ZERO],[
+    count=`counter_delta_in_total "$1" "$2" "$3" "$4"`
+    rc=$?
+    AT_CHECK([test $rc -eq 0 -a $count -ne 0])
+])
+
+# OVN_CONTROLLER_EXPECT_HIT SANDBOXES COUNTER COMMAND
+#
+# Checks if the COUNTER value has changed for any of the ovn-controller
+# processes from the SANDBOXES when the COMMAND was run.
+m4_define([OVN_CONTROLLER_EXPECT_HIT],[
+    CHECK_COUNTER_DELTA_IS_NOT_ZERO([$1], [ovn-controller], [$2], [$3])
+])
+
+# OVN_CONTROLLER_EXPECT_NO_HIT SANDBOXES COUNTER COMMAND
+#
+# Checks if the COUNTER value has not changed for any of the ovn-controller
+# processes from the SANDBOXES when the COMMAND was run.
+m4_define([OVN_CONTROLLER_EXPECT_NO_HIT],[
+    CHECK_COUNTER_DELTA_IS_ZERO([$1], [ovn-controller], [$2], [$3])
+])
+
+AT_SETUP([ovn -- ovn-controller incremental processing])
+# Check which operations the trigger full logical flow processing.
+#
+# Create and destroy logical routers, switches, ports, address sets and ACLs
+# while counting calls to lflow_run() in ovn-controller.
+
+ovn_start
+net_add n1
+for i in 1 2; do
+    sim_add hv$i
+    as hv$i
+    ovs-vsctl add-br br-phys
+    ovn_attach n1 br-phys 192.168.0.$i
+done
+
+# Add router lr1
+OVN_CONTROLLER_EXPECT_HIT(
+    [hv1 hv2], [lflow_run],
+    [ovn-nbctl --wait=hv lr-add lr1]
+)
+
+for i in 1 2; do
+    ls=ls$i
+    lsp=$ls-lr1
+    lrp=lr1-$ls
+
+    # Add switch $ls
+    OVN_CONTROLLER_EXPECT_HIT(
+        [hv1 hv2], [lflow_run],
+        [ovn-nbctl --wait=hv ls-add $ls]
+    )
+    OVN_CONTROLLER_EXPECT_NO_HIT(
+        [hv1 hv2], [lflow_run],
+        [ovn-nbctl --wait=hv add Logical_Switch $ls other_config subnet=10.0.$i.0/24]
+    )
+
+    # Add router port to $ls
+    OVN_CONTROLLER_EXPECT_HIT(
+        [hv1 hv2], [lflow_run],
+        [ovn-nbctl --wait=hv lrp-add lr1 $lrp 02:00:00:00:0$i:01 10.0.$i.1/24]
+    )
+    OVN_CONTROLLER_EXPECT_NO_HIT(
+        [hv1 hv2], [lflow_run],
+        [ovn-nbctl --wait=hv lsp-add $ls $lsp]
+    )
+    OVN_CONTROLLER_EXPECT_HIT(
+        [hv1 hv2], [lflow_run],
+        [ovn-nbctl --wait=hv lsp-set-type $lsp router]
+    )
+    OVN_CONTROLLER_EXPECT_HIT(
+        [hv1 hv2], [lflow_run],
+        [ovn-nbctl --wait=hv lsp-set-addresses $lsp router]
+    )
+done
+
+for i in 1 2; do
+    as=as$i
+    hv=hv$i
+    ls=ls$i
+    lp=lp$i
+    vif=vif$i
+
+    # Add port $lp
+    OVN_CONTROLLER_EXPECT_NO_HIT(
+        [hv1 hv2], [lflow_run],
+        [ovn-nbctl --wait=hv lsp-add $ls $lp]
+    )
+    OVN_CONTROLLER_EXPECT_NO_HIT(
+        [hv1 hv2], [lflow_run],
+        [ovn-nbctl --wait=hv lsp-set-addresses $lp "dynamic"]
+    )
+    OVN_CONTROLLER_EXPECT_NO_HIT(
+        [hv1 hv2], [lflow_run],
+        [ovn-nbctl --wait=hv wait-until Logical_Switch_Port $lp 'dynamic_addresses!=[]']
+    )
+    OVN_CONTROLLER_EXPECT_NO_HIT(
+        [hv1 hv2], [lflow_run],
+        [ovn-nbctl --wait=hv get Logical_Switch_Port $lp dynamic_addresses]
+    )
+
+    # Add address set $as
+    OVN_CONTROLLER_EXPECT_HIT(
+        [hv1 hv2], [lflow_run],
+        [ovn-nbctl --wait=hv create Address_Set name="$as"]
+    )
+    OVN_CONTROLLER_EXPECT_HIT(
+        [hv1 hv2], [lflow_run],
+        [ovn-nbctl --wait=hv add Address_Set "$as" addresses "10.0.$i.10"]
+    )
+
+    # Add ACLs for port $lp
+    OVN_CONTROLLER_EXPECT_NO_HIT(
+        [hv1 hv2], [lflow_run],
+        [ovn-nbctl --wait=hv acl-add $ls to-lport 1001 'outport == "'$lp'" && ip4.src == $'$as' allow']
+    )
+    OVN_CONTROLLER_EXPECT_NO_HIT(
+        [hv1 hv2], [lflow_run],
+        [ovn-nbctl --wait=hv acl-add $ls to-lport 1000 'outport == "'$lp'" drop']
+    )
+
+    # Bind port $lp
+    OVN_CONTROLLER_EXPECT_HIT(
+        [hv1 hv2], [lflow_run],
+        [as $hv ovs-vsctl add-port br-int $vif -- set Interface $vif external-ids:iface-id=$lp]
+    )
+
+    # Wait for port $lp
+    OVN_CONTROLLER_EXPECT_NO_HIT(
+        [hv1 hv2], [lflow_run],
+        [ovn-nbctl --wait=hv wait-until Logical_Switch_Port $lp 'up=true']
+    )
+done
+
+for i in 1 2; do
+  as=as$i
+  ls=ls$i
+  lp=lp$i
+
+  # Delete port $lp
+  OVN_CONTROLLER_EXPECT_HIT(
+      [hv1 hv2], [lflow_run],
+      [ovn-nbctl --wait=hv lsp-del $lp]
+  )
+
+  # Delete ACLs for port $lp
+  OVN_CONTROLLER_EXPECT_NO_HIT(
+      [hv1 hv2], [lflow_run],
+      [ovn-nbctl --wait=hv acl-del $ls to-lport 1001 'outport == "'$lp'" && ip4.src == $'$as' allow']
+  )
+  OVN_CONTROLLER_EXPECT_NO_HIT(
+      [hv1 hv2], [lflow_run],
+      [ovn-nbctl --wait=hv acl-del $ls to-lport 1000 'outport == "'$lp'" drop']
+  )
+
+  # Delete address set $as
+  OVN_CONTROLLER_EXPECT_HIT(
+      [hv1 hv2], [lflow_run],
+      [ovn-nbctl --wait=hv remove Address_Set "$as" addresses "10.0.$i.10"]
+  )
+  OVN_CONTROLLER_EXPECT_HIT(
+      [hv1 hv2], [lflow_run],
+      [ovn-nbctl --wait=hv destroy Address_Set "$as"]
+  )
+done
+
+for i in 1 2; do
+  ls=ls$i
+
+  # Delete switch $ls
+  OVN_CONTROLLER_EXPECT_HIT(
+      [hv1 hv2], [lflow_run],
+      [ovn-nbctl ls-del $ls]
+  )
+done
+
+# Delete router lr1
+OVN_CONTROLLER_EXPECT_HIT(
+    [hv1 hv2], [lflow_run],
+    [ovn-nbctl lr-del lr1]
+)
+
+OVN_CLEANUP([hv1], [hv2])
+
+AT_CLEANUP
