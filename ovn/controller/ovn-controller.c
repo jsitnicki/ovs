@@ -1136,7 +1136,8 @@ flow_output_sb_multicast_group_handler(struct engine_node *node)
 }
 
 static bool
-flow_output_addr_sets_handler(struct engine_node *node)
+_flow_output_resource_ref_handler(struct engine_node *node,
+                                 enum ref_type ref_type)
 {
     struct controller_ctx *ctx = (struct controller_ctx *)node->context;
     struct ed_type_runtime_data *data =
@@ -1175,11 +1176,28 @@ flow_output_addr_sets_handler(struct engine_node *node)
     struct lflow_resource_ref *lfrr = &fo->lflow_resource_ref;
 
     bool changed;
-    const char *as;
+    const char *ref_name;
+    struct sset *new, *updated, *deleted;
 
-    SSET_FOR_EACH (as, &as_data->deleted) {
-        if (!lflow_handle_changed_ref(flow_table, lfrr, REF_TYPE_ADDRSET,
-                      as, ctx, chassis, chassis_index, local_datapaths,
+    switch (ref_type) {
+        case REF_TYPE_ADDRSET:
+            new = &as_data->new;
+            updated = &as_data->updated;
+            deleted = &as_data->deleted;
+            break;
+        case REF_TYPE_PORTGROUP:
+            new = &pg_data->new;
+            updated = &pg_data->updated;
+            deleted = &pg_data->deleted;
+            break;
+        default:
+            OVS_NOT_REACHED();
+    }
+
+
+    SSET_FOR_EACH (ref_name, deleted) {
+        if (!lflow_handle_changed_ref(flow_table, lfrr, ref_type, ref_name,
+                      ctx, chassis, chassis_index, local_datapaths,
                       group_table, meter_table, addr_sets, port_groups,
                       active_tunnels, local_lport_ids, conj_id_ofs,
                       &changed)) {
@@ -1187,9 +1205,9 @@ flow_output_addr_sets_handler(struct engine_node *node)
         }
         node->changed = changed || node->changed;
     }
-    SSET_FOR_EACH (as, &as_data->updated) {
-        if (!lflow_handle_changed_ref(flow_table, lfrr, REF_TYPE_ADDRSET,
-                      as, ctx, chassis, chassis_index, local_datapaths,
+    SSET_FOR_EACH (ref_name, updated) {
+        if (!lflow_handle_changed_ref(flow_table, lfrr, ref_type, ref_name,
+                      ctx, chassis, chassis_index, local_datapaths,
                       group_table, meter_table, addr_sets, port_groups,
                       active_tunnels, local_lport_ids, conj_id_ofs,
                       &changed)) {
@@ -1197,9 +1215,9 @@ flow_output_addr_sets_handler(struct engine_node *node)
         }
         node->changed = changed || node->changed;
     }
-    SSET_FOR_EACH (as, &as_data->new) {
-        if (!lflow_handle_changed_ref(flow_table, lfrr, REF_TYPE_ADDRSET,
-                      as, ctx, chassis, chassis_index, local_datapaths,
+    SSET_FOR_EACH (ref_name, new) {
+        if (!lflow_handle_changed_ref(flow_table, lfrr, ref_type, ref_name,
+                      ctx, chassis, chassis_index, local_datapaths,
                       group_table, meter_table, addr_sets, port_groups,
                       active_tunnels, local_lport_ids, conj_id_ofs,
                       &changed)) {
@@ -1209,6 +1227,18 @@ flow_output_addr_sets_handler(struct engine_node *node)
     }
 
     return true;
+}
+
+static bool
+flow_output_addr_sets_handler(struct engine_node *node)
+{
+    return _flow_output_resource_ref_handler(node, REF_TYPE_ADDRSET);
+}
+
+static bool
+flow_output_port_groups_handler(struct engine_node *node)
+{
+    return _flow_output_resource_ref_handler(node, REF_TYPE_PORTGROUP);
 }
 
 int
@@ -1296,7 +1326,7 @@ main(int argc, char *argv[])
     engine_add_input(&en_port_groups, &en_sb_port_group, NULL);
 
     engine_add_input(&en_flow_output, &en_addr_sets, flow_output_addr_sets_handler);
-    engine_add_input(&en_flow_output, &en_port_groups, NULL);
+    engine_add_input(&en_flow_output, &en_port_groups, flow_output_port_groups_handler);
     engine_add_input(&en_flow_output, &en_runtime_data, NULL);
 
     engine_add_input(&en_flow_output, &en_ovs_port, NULL);
