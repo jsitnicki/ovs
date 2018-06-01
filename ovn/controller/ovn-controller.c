@@ -315,13 +315,25 @@ addr_sets_update(struct controller_ctx *ctx, struct shash *addr_sets,
 /* Iterate port groups in the southbound database.  Create and update the
  * corresponding symtab entries as necessary. */
 static void
-port_groups_init(struct controller_ctx *ctx, struct shash *port_groups)
+port_groups_update(struct controller_ctx *ctx, struct shash *port_groups,
+                   struct sset *new, struct sset *deleted,
+                   struct sset *updated)
 {
     const struct sbrec_port_group *pg;
-    SBREC_PORT_GROUP_FOR_EACH (pg, ctx->ovnsb_idl) {
-        expr_const_sets_add(port_groups, pg->name,
-                            (const char *const *) pg->ports,
-                            pg->n_ports, false);
+    SBREC_PORT_GROUP_FOR_EACH_TRACKED (pg, ctx->ovnsb_idl) {
+        if (sbrec_port_group_is_deleted(pg)) {
+            expr_const_sets_remove(port_groups, pg->name);
+            sset_add(deleted, pg->name);
+        } else {
+            expr_const_sets_add(port_groups, pg->name,
+                                (const char *const *) pg->ports,
+                                pg->n_ports, false);
+            if (sbrec_port_group_is_new(pg)) {
+                sset_add(new, pg->name);
+            } else {
+                sset_add(updated, pg->name);
+            }
+        }
     }
 }
 
@@ -664,6 +676,53 @@ en_addr_sets_run(struct engine_node *node)
                     || !sset_is_empty(&as->updated);
 }
 
+struct ed_type_port_groups{
+    struct shash port_groups;
+    struct sset new;
+    struct sset deleted;
+    struct sset updated;
+};
+
+static void
+en_port_groups_init(struct engine_node *node)
+{
+    struct ed_type_port_groups *pg = (struct ed_type_port_groups *)node->data;
+    shash_init(&pg->port_groups);
+    sset_init(&pg->new);
+    sset_init(&pg->deleted);
+    sset_init(&pg->updated);
+}
+
+static void
+en_port_groups_cleanup(struct engine_node *node)
+{
+    struct ed_type_port_groups *pg = (struct ed_type_port_groups *)node->data;
+    expr_const_sets_destroy(&pg->port_groups);
+    shash_destroy(&pg->port_groups);
+    sset_destroy(&pg->new);
+    sset_destroy(&pg->deleted);
+    sset_destroy(&pg->updated);
+}
+
+/* For en_port_groups, the run function handles changes since there is only
+ * one input */
+static void
+en_port_groups_run(struct engine_node *node)
+{
+    struct controller_ctx *ctx = (struct controller_ctx *)node->context;
+    struct ed_type_port_groups *pg = (struct ed_type_port_groups *)node->data;
+
+    sset_clear(&pg->new);
+    sset_clear(&pg->deleted);
+    sset_clear(&pg->updated);
+
+    port_groups_update(ctx, &pg->port_groups, &pg->new,
+                       &pg->deleted, &pg->updated);
+
+    node->changed = !sset_is_empty(&pg->new) || !sset_is_empty(&pg->deleted)
+                    || !sset_is_empty(&pg->updated);
+}
+
 struct ed_type_runtime_data {
     struct chassis_index chassis_index;
 
@@ -681,7 +740,6 @@ struct ed_type_runtime_data {
      * <datapath-tunnel-key>_<port-tunnel-key> */
     struct sset local_lport_ids;
     struct sset active_tunnels;
-    struct shash port_groups;
 
     /* connection tracking zones. */
     unsigned long ct_zone_bitmap[BITMAP_N_LONGS(MAX_CT_ZONES)];
@@ -699,7 +757,6 @@ en_runtime_data_init(struct engine_node *node)
     sset_init(&data->local_lports);
     sset_init(&data->local_lport_ids);
     sset_init(&data->active_tunnels);
-    shash_init(&data->port_groups);
     shash_init(&data->pending_ct_zones);
     simap_init(&data->ct_zones);
 
@@ -714,9 +771,6 @@ en_runtime_data_cleanup(struct engine_node *node)
 {
     struct ed_type_runtime_data *data =
         (struct ed_type_runtime_data *)node->data;
-
-    expr_const_sets_destroy(&data->port_groups);
-    shash_destroy(&data->port_groups);
 
     chassis_index_destroy(&data->chassis_index);
 
@@ -747,7 +801,6 @@ en_runtime_data_run(struct engine_node *node)
     struct sset *local_lport_ids = &data->local_lport_ids;
     struct sset *active_tunnels = &data->active_tunnels;
     struct chassis_index *chassis_index = &data->chassis_index;
-    struct shash *port_groups = &data->port_groups;
     unsigned long *ct_zone_bitmap = data->ct_zone_bitmap;
     struct shash *pending_ct_zones = &data->pending_ct_zones;
     struct simap *ct_zones = &data->ct_zones;
@@ -768,7 +821,6 @@ en_runtime_data_run(struct engine_node *node)
         sset_destroy(local_lport_ids);
         sset_destroy(active_tunnels);
         chassis_index_destroy(chassis_index);
-        expr_const_sets_destroy(port_groups);
         sset_init(local_lports);
         sset_init(local_lport_ids);
         sset_init(active_tunnels);
@@ -789,7 +841,6 @@ en_runtime_data_run(struct engine_node *node)
                 chassis_index, active_tunnels, local_datapaths,
                 local_lports, local_lport_ids);
 
-    port_groups_init(ctx, port_groups);
     update_ct_zones(local_lports, local_datapaths, ct_zones,
                     ct_zone_bitmap, pending_ct_zones);
 
@@ -870,12 +921,16 @@ en_flow_output_run(struct engine_node *node)
     struct sset *local_lport_ids = &rt_data->local_lport_ids;
     struct sset *active_tunnels = &rt_data->active_tunnels;
     struct chassis_index *chassis_index = &rt_data->chassis_index;
-    struct shash *port_groups = &rt_data->port_groups;
     struct simap *ct_zones = &rt_data->ct_zones;
 
     struct ed_type_addr_sets *as_data =
         (struct ed_type_addr_sets *)engine_get_input("addr_sets", node)->data;
     struct shash *addr_sets = &as_data->addr_sets;
+
+    struct ed_type_port_groups *pg_data =
+        (struct ed_type_port_groups *)engine_get_input(
+            "port_groups", node)->data;
+    struct shash *port_groups = &pg_data->port_groups;
 
     const struct ovsrec_bridge *br_int = get_br_int(ctx);
 
@@ -932,10 +987,15 @@ flow_output_sb_logical_flow_handler(struct engine_node *node)
     struct sset *local_lport_ids = &data->local_lport_ids;
     struct sset *active_tunnels = &data->active_tunnels;
     struct chassis_index *chassis_index = &data->chassis_index;
-    struct shash *port_groups = &data->port_groups;
+
     struct ed_type_addr_sets *as_data =
         (struct ed_type_addr_sets *)engine_get_input("addr_sets", node)->data;
     struct shash *addr_sets = &as_data->addr_sets;
+
+    struct ed_type_port_groups *pg_data =
+        (struct ed_type_port_groups *)engine_get_input(
+            "port_groups", node)->data;
+    struct shash *port_groups = &pg_data->port_groups;
 
     const struct ovsrec_bridge *br_int = get_br_int(ctx);
 
@@ -1086,10 +1146,16 @@ flow_output_addr_sets_handler(struct engine_node *node)
     struct sset *local_lport_ids = &data->local_lport_ids;
     struct sset *active_tunnels = &data->active_tunnels;
     struct chassis_index *chassis_index = &data->chassis_index;
-    struct shash *port_groups = &data->port_groups;
+
     struct ed_type_addr_sets *as_data =
         (struct ed_type_addr_sets *)engine_get_input("addr_sets", node)->data;
     struct shash *addr_sets = &as_data->addr_sets;
+
+    struct ed_type_port_groups *pg_data =
+        (struct ed_type_port_groups *)engine_get_input(
+            "port_groups", node)->data;
+    struct shash *port_groups = &pg_data->port_groups;
+
     const struct ovsrec_bridge *br_int = get_br_int(ctx);
     const char *chassis_id = get_chassis_id(ctx->ovs_idl);
 
@@ -1202,6 +1268,7 @@ main(int argc, char *argv[])
     struct ed_type_runtime_data ed_runtime_data;
     struct ed_type_flow_output ed_flow_output;
     struct ed_type_addr_sets ed_addr_sets;
+    struct ed_type_port_groups ed_port_groups;
 
     ENGINE_NODE_SB(chassis, "chassis", &ctx);
     ENGINE_NODE_SB(encap, "encap", &ctx);
@@ -1221,12 +1288,15 @@ main(int argc, char *argv[])
     ENGINE_NODE_OVS(interface, "ovs_table_interface", &ctx);
 
     ENGINE_NODE(addr_sets, "addr_sets", &ctx);
+    ENGINE_NODE(port_groups, "port_groups", &ctx);
     ENGINE_NODE(runtime_data, "runtime_data", &ctx);
     ENGINE_NODE(flow_output, "flow_output", &ctx);
 
     engine_add_input(&en_addr_sets, &en_sb_address_set, NULL);
+    engine_add_input(&en_port_groups, &en_sb_port_group, NULL);
 
     engine_add_input(&en_flow_output, &en_addr_sets, flow_output_addr_sets_handler);
+    engine_add_input(&en_flow_output, &en_port_groups, NULL);
     engine_add_input(&en_flow_output, &en_runtime_data, NULL);
 
     engine_add_input(&en_flow_output, &en_ovs_port, NULL);
@@ -1248,7 +1318,6 @@ main(int argc, char *argv[])
     engine_add_input(&en_runtime_data, &en_ovs_interface, NULL);
 
     engine_add_input(&en_runtime_data, &en_sb_chassis, NULL);
-    engine_add_input(&en_runtime_data, &en_sb_port_group, NULL);
     engine_add_input(&en_runtime_data, &en_sb_datapath_binding, NULL);
     engine_add_input(&en_runtime_data, &en_sb_port_binding, runtime_data_sb_port_binding_handler);
     engine_add_input(&en_runtime_data, &en_sb_gateway_chassis, NULL);
@@ -1354,7 +1423,7 @@ main(int argc, char *argv[])
         if (pending_pkt.conn) {
             if (br_int && chassis) {
                 char *error = ofctrl_inject_pkt(br_int, pending_pkt.flow_s,
-                                                &ed_runtime_data.port_groups,
+                                                &ed_port_groups.port_groups,
                                                 &ed_addr_sets.addr_sets);
                 if (error) {
                     unixctl_command_reply_error(pending_pkt.conn, error);
