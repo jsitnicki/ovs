@@ -253,15 +253,31 @@ EOF
     fi
 
     daemon_opts="--detach --no-chdir --pidfile -vconsole:off --log-file"
-    for db in ovn-sb ovn-nb; do
-        mkdir "$sim_base"/$db
-        touch "$sim_base"/$db/.$db.db.~lock~
-        as $db ovsdb-tool create "$sim_base"/$db/$db.db "$sim_srcdir"/ovn/$db.ovsschema
-        as $db ovsdb-server $daemon_opts --remote=punix:"$sim_base"/$db/$db.sock "$sim_base"/$db/$db.db
-    done
 
-    OVN_NB_DB=unix:$sim_base/ovn-nb/ovn-nb.sock; export OVN_NB_DB
-    OVN_SB_DB=unix:$sim_base/ovn-sb/ovn-sb.sock; export OVN_SB_DB
+    # SB DB
+    db=ovn-sb
+    mkdir "$sim_base"/$db
+    touch "$sim_base"/$db/.$db.db.~lock~
+    if test -z "$OVN_SB_DB_FILE"; then
+        as $db ovsdb-tool create "$sim_base"/$db/$db.db "$sim_srcdir"/ovn/$db.ovsschema
+    else
+        cp "$OVN_SB_DB_FILE" "$sim_base"/$db/$db.db
+    fi
+    as $db ovsdb-server $daemon_opts --remote=ptcp:6642 "$sim_base"/$db/$db.db
+
+    # NB DB
+    db=ovn-nb
+    mkdir "$sim_base"/$db
+    touch "$sim_base"/$db/.$db.db.~lock~
+    if test -z "$OVN_NB_DB_FILE"; then
+        as $db ovsdb-tool create "$sim_base"/$db/$db.db "$sim_srcdir"/ovn/$db.ovsschema
+    else
+        cp "$OVN_NB_DB_FILE" "$sim_base"/$db/$db.db
+    fi
+    as $db ovsdb-server $daemon_opts --remote=ptcp:6641 "$sim_base"/$db/$db.db
+
+    OVN_NB_DB=tcp:127.0.0.1:6641; export OVN_NB_DB
+    OVN_SB_DB=tcp:127.0.0.1:6642; export OVN_SB_DB
 
     ovn-nbctl init
     ovn-sbctl init
