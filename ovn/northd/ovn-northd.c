@@ -6366,6 +6366,30 @@ sync_address_sets(struct northd_context *ctx)
                 }
                 destroy_lport_addresses(&laddrs);
             }
+            if (nb_port_group->ports[i]->dynamic_addresses) {
+                struct lport_addresses laddrs;
+                extract_lsp_addresses(nb_port_group->ports[i]->dynamic_addresses,
+                                     &laddrs);
+                while (n_ipv4_addrs_buf < n_ipv4_addrs + laddrs.n_ipv4_addrs) {
+                    n_ipv4_addrs_buf *= 2;
+                    ipv4_addrs = xrealloc(ipv4_addrs,
+                            n_ipv4_addrs_buf * sizeof *ipv4_addrs);
+                }
+                for (size_t k = 0; k < laddrs.n_ipv4_addrs; k++) {
+                    ipv4_addrs[n_ipv4_addrs++] =
+                        xstrdup(laddrs.ipv4_addrs[k].addr_s);
+                }
+                while (n_ipv6_addrs_buf < n_ipv6_addrs + laddrs.n_ipv6_addrs) {
+                    n_ipv6_addrs_buf *= 2;
+                    ipv6_addrs = xrealloc(ipv6_addrs,
+                            n_ipv6_addrs_buf * sizeof *ipv6_addrs);
+                }
+                for (size_t k = 0; k < laddrs.n_ipv6_addrs; k++) {
+                    ipv6_addrs[n_ipv6_addrs++] =
+                        xstrdup(laddrs.ipv6_addrs[k].addr_s);
+                }
+                destroy_lport_addresses(&laddrs);
+            }
         }
         char *ipv4_addrs_name = xasprintf("%s_ip4", nb_port_group->name);
         char *ipv6_addrs_name = xasprintf("%s_ip6", nb_port_group->name);
