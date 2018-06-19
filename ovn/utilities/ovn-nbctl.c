@@ -20,6 +20,7 @@
 #include <stdio.h>
 
 #include "command-line.h"
+#include "daemon.h"
 #include "db-ctl-base.h"
 #include "dirs.h"
 #include "fatal-signal.h"
@@ -168,6 +169,7 @@ parse_options(int argc, char *argv[], struct shash *local_options)
         OPT_COMMANDS,
         OPT_OPTIONS,
         OPT_BOOTSTRAP_CA_CERT,
+        DAEMON_OPTION_ENUMS,
         VLOG_OPTION_ENUMS,
         TABLE_OPTION_ENUMS,
         SSL_OPTION_ENUMS,
@@ -186,6 +188,7 @@ parse_options(int argc, char *argv[], struct shash *local_options)
         {"leader-only", no_argument, &leader_only, true},
         {"no-leader-only", no_argument, &leader_only, false},
         {"version", no_argument, NULL, 'V'},
+        DAEMON_LONG_OPTIONS,
         VLOG_LONG_OPTIONS,
         STREAM_SSL_LONG_OPTIONS,
         {"bootstrap-ca-cert", required_argument, NULL, OPT_BOOTSTRAP_CA_CERT},
@@ -290,6 +293,7 @@ parse_options(int argc, char *argv[], struct shash *local_options)
             }
             break;
 
+        DAEMON_OPTION_HANDLERS
         VLOG_OPTION_HANDLERS
         TABLE_OPTION_HANDLERS(&table_style)
         STREAM_SSL_OPTION_HANDLERS
@@ -483,6 +487,7 @@ Options:\n\
            program_name, program_name, ctl_get_db_cmd_usage(),
            ctl_list_db_tables_usage(), default_nb_db());
     table_usage();
+    daemon_usage();
     vlog_usage();
     printf("\
   --no-syslog             equivalent to --verbose=nbctl:syslog:warn\n");
