@@ -38,6 +38,7 @@
 #include "svec.h"
 #include "table.h"
 #include "timeval.h"
+#include "unixctl.h"
 #include "util.h"
 #include "openvswitch/vlog.h"
 
@@ -80,6 +81,10 @@ OVS_NO_RETURN static void nbctl_exit(int status);
 /* --leader-only, --no-leader-only: Only accept the leader in a cluster. */
 static int leader_only = true;
 
+/* --unixctl-path: Path to use for unixctl server, for "monitor" and "snoop"
+     commands. */
+static char *unixctl_path;
+
 static void nbctl_cmd_init(void);
 OVS_NO_RETURN static void usage(void);
 static void parse_options(int argc, char *argv[], struct shash *local_options);
@@ -90,16 +95,19 @@ static bool do_nbctl(const char *args, struct ctl_command *, size_t n,
 static const struct nbrec_dhcp_options *dhcp_options_get(
     struct ctl_context *ctx, const char *id, bool must_exist);
 
+static unixctl_cb_func nbctl_server_exit;
+
 static void client_main_loop(struct ovsdb_idl *idl, const char *args,
                              struct ctl_command *commands, size_t n_commands);
+static void server_main_loop(void);
 
 int
 main(int argc, char *argv[])
 {
     struct ovsdb_idl *idl;
-    struct ctl_command *commands;
+    struct ctl_command *commands = NULL;
     struct shash local_options;
-    size_t n_commands;
+    size_t n_commands = 0;
 
     set_program_name(argv[0]);
     fatal_ignore_sigpipe();
@@ -112,11 +120,21 @@ main(int argc, char *argv[])
     char *args = process_escape_args(argv);
     shash_init(&local_options);
     parse_options(argc, argv, &local_options);
-    commands = ctl_parse_commands(argc - optind, argv + optind, &local_options,
-                                  &n_commands);
+    argc -= optind;
+    argv += optind;
+
+    if (get_detach()) {
+        if (argc != 0) {
+            ctl_fatal("non-option arguments not supported with --detach "
+                      "(use --help for help)");
+        }
+    } else {
+        commands = ctl_parse_commands(argc, argv, &local_options, &n_commands);
+    }
     VLOG(ctl_might_write_to_db(commands, n_commands) ? VLL_INFO : VLL_DBG,
          "Called as %s", args);
 
+    /* XXX: Don't die on timeout as daemon? */
     if (timeout) {
         time_alarm(timeout);
     }
@@ -126,7 +144,11 @@ main(int argc, char *argv[])
     ovsdb_idl_set_leader_only(idl, leader_only);
     run_prerequisites(commands, n_commands, idl);
 
-    client_main_loop(idl, args, commands, n_commands);
+    if (get_detach()) {
+        server_main_loop();
+    } else {
+        client_main_loop(idl, args, commands, n_commands);
+    }
 
     free(args);
     exit(EXIT_SUCCESS);
@@ -165,6 +187,33 @@ client_main_loop(struct ovsdb_idl *idl, const char *args,
             ovsdb_idl_wait(idl);
             poll_block();
         }
+    }
+}
+
+static void
+server_main_loop(void)
+{
+    struct unixctl_server *server = NULL;
+    bool exiting = false;
+
+    VLOG_INFO("Running in server mode...");
+
+    /* XXX: Don't daemonize yet */
+    /* daemonize_start(false); */
+    int error = unixctl_server_create(unixctl_path, &server);
+    if (error) {
+        ctl_fatal("failed to create unixctl server (%s)",
+                  ovs_retval_to_string(error));
+    }
+    unixctl_command_register("exit", "", 0, 0, nbctl_server_exit, &exiting);
+
+    for (;;) {
+        if (exiting) {
+            break;
+        }
+        unixctl_server_run(server);
+        unixctl_server_wait(server);
+        poll_block();
     }
 }
 
@@ -4346,6 +4395,15 @@ nbctl_exit(int status)
     }
     ovsdb_idl_destroy(the_idl);
     exit(status);
+}
+
+static void
+nbctl_server_exit(struct unixctl_conn *conn, int argc OVS_UNUSED,
+            const char *argv[] OVS_UNUSED, void *exiting_)
+{
+    bool *exiting = exiting_;
+    *exiting = true;
+    unixctl_command_reply(conn, NULL);
 }
 
 static const struct ctl_command_syntax nbctl_commands[] = {
