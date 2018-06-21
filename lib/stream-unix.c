@@ -102,6 +102,7 @@ punix_open(const char *name OVS_UNUSED, char *suffix,
         free(bind_path);
         return error;
     }
+    VLOG_DBG("Listening at %s", bind_path);
 
     return new_fd_pstream(xstrdup(name), fd,
                           punix_accept, bind_path, pstreamp);
@@ -135,4 +136,3 @@ const struct pstream_class punix_pstream_class = {
     NULL,
     NULL,
 };
-
