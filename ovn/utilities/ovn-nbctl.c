@@ -148,6 +148,13 @@ main(int argc, char *argv[])
         server_main_loop();
     } else {
         client_main_loop(idl, args, commands, n_commands);
+        for (struct ctl_command *c = commands; c < &commands[n_commands]; c++) {
+            ds_destroy(&c->output);
+            table_destroy(c->table);
+            free(c->table);
+            shash_destroy_free_data(&c->options);
+        }
+        free(commands);
     }
 
     free(args);
@@ -4332,13 +4339,7 @@ do_nbctl(const char *args, struct ctl_command *commands, size_t n_commands,
         } else {
             fputs(ds_cstr(ds), stdout);
         }
-        ds_destroy(&c->output);
-        table_destroy(c->table);
-        free(c->table);
-
-        shash_destroy_free_data(&c->options);
     }
-    free(commands);
 
     if (wait_type != NBCTL_WAIT_NONE && status != TXN_UNCHANGED) {
         ovsdb_idl_enable_reconnect(idl);
