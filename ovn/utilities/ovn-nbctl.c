@@ -96,10 +96,14 @@ static const struct nbrec_dhcp_options *dhcp_options_get(
     struct ctl_context *ctx, const char *id, bool must_exist);
 
 static unixctl_cb_func nbctl_server_exit;
+static unixctl_cb_func nbctl_server_command;
 
 static void client_main_loop(struct ovsdb_idl *idl, const char *args,
                              struct ctl_command *commands, size_t n_commands);
-static void server_main_loop(void);
+static void server_main_loop(struct ovsdb_idl *idl);
+static void server_commands_init(struct ovsdb_idl *idl, bool *exiting);
+const struct ctl_command_syntax *find_command_syntax(const char *name);
+
 
 int
 main(int argc, char *argv[])
@@ -145,7 +149,7 @@ main(int argc, char *argv[])
     run_prerequisites(commands, n_commands, idl);
 
     if (get_detach()) {
-        server_main_loop();
+        server_main_loop(idl);
     } else {
         client_main_loop(idl, args, commands, n_commands);
         for (struct ctl_command *c = commands; c < &commands[n_commands]; c++) {
@@ -201,7 +205,7 @@ client_main_loop(struct ovsdb_idl *idl, const char *args,
 }
 
 static void
-server_main_loop(void)
+server_main_loop(struct ovsdb_idl *idl)
 {
     struct unixctl_server *server = NULL;
     bool exiting = false;
@@ -215,7 +219,7 @@ server_main_loop(void)
         ctl_fatal("failed to create unixctl server (%s)",
                   ovs_retval_to_string(error));
     }
-    unixctl_command_register("exit", "", 0, 0, nbctl_server_exit, &exiting);
+    server_commands_init(idl, &exiting);
 
     for (;;) {
         if (exiting) {
@@ -4409,6 +4413,23 @@ nbctl_server_exit(struct unixctl_conn *conn, int argc OVS_UNUSED,
     unixctl_command_reply(conn, NULL);
 }
 
+static void
+nbctl_server_command(struct unixctl_conn *conn, int argc, const char *argv[],
+                     void *idl_)
+{
+    struct ovsdb_idl *idl = idl_;
+
+    const struct ctl_command_syntax *syntax = find_command_syntax(argv[0]);
+    ovs_assert(syntax);
+
+    VLOG_INFO("%s cb: Got %d args", syntax->name, argc);
+    for (int i = 0; i < argc; i++) {
+        VLOG_INFO("%s cb: Arg %d = \"%s\"", syntax->name, i, argv[i]);
+    }
+
+    unixctl_command_reply(conn, NULL);
+}
+
 static const struct ctl_command_syntax nbctl_commands[] = {
     { "init", 0, 0, "", NULL, nbctl_init, NULL, "", RW },
     { "sync", 0, 0, "", nbctl_pre_sync, nbctl_sync, NULL, "", RO },
@@ -4560,10 +4581,54 @@ static const struct ctl_command_syntax nbctl_commands[] = {
     {NULL, 0, 0, NULL, NULL, NULL, NULL, "", RO},
 };
 
+const struct ctl_command_syntax *
+find_command_syntax(const char *name)
+{
+    const struct ctl_command_syntax *p;
+
+    for (p = nbctl_commands; p->name != NULL; p++) {
+        if (!strcmp(p->name, name)) {
+            return p;
+        }
+    }
+    return NULL;
+}
+
 /* Registers nbctl and common db commands. */
 static void
 nbctl_cmd_init(void)
 {
     ctl_init(&nbrec_idl_class, nbrec_table_classes, tables, NULL, nbctl_exit);
     ctl_register_commands(nbctl_commands);
+}
+
+static void
+server_register_command(const struct ctl_command_syntax *command,
+                        struct ovsdb_idl *idl)
+{
+    /* XXX: Skip commands w/ pre-run and post-run callbacks for now. */
+    if (command->prerequisites || command->postprocess) {
+        return;
+    }
+    unixctl_command_register(command->name, command->arguments,
+                             command->min_args, command->max_args,
+                             nbctl_server_command, idl);
+}
+
+static void
+server_register_commands(const struct ctl_command_syntax *commands,
+                         struct ovsdb_idl *idl)
+{
+    const struct ctl_command_syntax *p;
+
+    for (p = commands; p->name; p++) {
+        server_register_command(p, idl);
+    }
+}
+
+static void
+server_commands_init(struct ovsdb_idl *idl, bool *exiting)
+{
+    unixctl_command_register("exit", "", 0, 0, nbctl_server_exit, exiting);
+    server_register_commands(nbctl_commands, idl);
 }
