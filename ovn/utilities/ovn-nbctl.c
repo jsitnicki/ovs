@@ -157,6 +157,9 @@ main(int argc, char *argv[])
         free(commands);
     }
 
+    ovsdb_idl_destroy(idl);
+    idl = the_idl = NULL;
+
     free(args);
     exit(EXIT_SUCCESS);
 }
@@ -4360,7 +4363,6 @@ do_nbctl(const char *args, struct ctl_command *commands, size_t n_commands,
     }
 
     ovsdb_idl_txn_destroy(txn);
-    ovsdb_idl_destroy(idl);
 
     return true;
 
