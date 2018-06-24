@@ -173,6 +173,7 @@ client_main_loop(struct ovsdb_idl *idl, const char *args,
                  struct ctl_command *commands, size_t n_commands)
 {
     unsigned int seqno;
+    bool idl_ready;
 
     /* Execute the commands.
      *
@@ -182,6 +183,12 @@ client_main_loop(struct ovsdb_idl *idl, const char *args,
      * it's because the database changed and we need to obtain an up-to-date
      * view of the database before we try the transaction again. */
     seqno = ovsdb_idl_get_seqno(idl);
+
+    /* IDL might have already obtained the database copy during previous
+     * invocation. If so, we can't expect the sequence number to change before
+     * we issue any new requests. */
+    idl_ready = ovsdb_idl_has_ever_connected(idl);
+    VLOG_INFO("seqno#1 %u", ovsdb_idl_get_seqno(idl));
     for (;;) {
         ovsdb_idl_run(idl);
         if (!ovsdb_idl_is_alive(idl)) {
@@ -190,13 +197,16 @@ client_main_loop(struct ovsdb_idl *idl, const char *args,
                       db, ovs_retval_to_string(retval));
         }
 
-        if (seqno != ovsdb_idl_get_seqno(idl)) {
+        VLOG_INFO("seqno#2 %u", ovsdb_idl_get_seqno(idl));
+        if (idl_ready || seqno != ovsdb_idl_get_seqno(idl)) {
+            idl_ready = false;
             seqno = ovsdb_idl_get_seqno(idl);
             if (do_nbctl(args, commands, n_commands, idl)) {
                 return;
             }
         }
 
+        VLOG_INFO("seqno#3 %u", ovsdb_idl_get_seqno(idl));
         if (seqno == ovsdb_idl_get_seqno(idl)) {
             ovsdb_idl_wait(idl);
             poll_block();
@@ -4427,7 +4437,29 @@ nbctl_server_command(struct unixctl_conn *conn, int argc, const char *argv[],
         VLOG_INFO("%s cb: Arg %d = \"%s\"", syntax->name, i, argv[i]);
     }
 
-    unixctl_command_reply(conn, NULL);
+    /* XXX: Fix constness or dup argv. */
+    char *args = process_escape_args((char **)argv);
+    /* XXX: Handle options. */
+    struct ctl_command commands[] = {
+        {
+            .syntax = syntax,
+            .argc = argc,
+            .argv = (char **)argv,
+            .options = SHASH_INITIALIZER(&commands[0].options),
+        }
+    };
+    client_main_loop(idl, args, commands, ARRAY_SIZE(commands));
+
+    struct ctl_command *c = &commands[0];
+    unixctl_command_reply(conn, ds_cstr_ro(&c->output));
+
+    /* XXX: Extract a destructor. */
+    ds_destroy(&c->output);
+    table_destroy(c->table);
+    free(c->table);
+    shash_destroy_free_data(&c->options);
+
+    free(args);
 }
 
 static const struct ctl_command_syntax nbctl_commands[] = {
