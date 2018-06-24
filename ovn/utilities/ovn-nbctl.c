@@ -232,11 +232,11 @@ server_main_loop(struct ovsdb_idl *idl)
     server_commands_init(idl, &exiting);
 
     for (;;) {
+        unixctl_server_run(server);
+        unixctl_server_wait(server);
         if (exiting) {
             break;
         }
-        unixctl_server_run(server);
-        unixctl_server_wait(server);
         poll_block();
     }
 }
