@@ -2052,6 +2052,18 @@ ctl_command_init_output(struct ctl_command *command)
     command->table = NULL;
 }
 
+/* Destroys contents of previously initialized 'command' fields that store
+ * generated output. */
+void
+ctl_command_destroy_output(struct ctl_command *command)
+{
+    if (command) {
+        ds_destroy(&command->output);
+        table_destroy(command->table);
+        free(command->table);
+    }
+}
+
 /* Returns true if it looks like this set of arguments might modify the
  * database, otherwise false.  (Not very smart, so it's prone to false
  * positives.) */

@@ -1375,9 +1375,7 @@ do_sbctl(const char *args, struct ctl_command *commands, size_t n_commands,
         } else {
             fputs(ds_cstr(ds), stdout);
         }
-        ds_destroy(&c->output);
-        table_destroy(c->table);
-        free(c->table);
+        ctl_command_destroy_output(c);
 
         shash_destroy_free_data(&c->options);
     }
@@ -1396,9 +1394,7 @@ try_again:
 
     ovsdb_symbol_table_destroy(symtab);
     for (c = commands; c < &commands[n_commands]; c++) {
-        ds_destroy(&c->output);
-        table_destroy(c->table);
-        free(c->table);
+        ctl_command_destroy_output(c);
     }
     free(error);
     return false;
