@@ -3781,8 +3781,7 @@ run_prerequisites(struct ctl_command *commands, size_t n_commands,
         if (c->syntax->prerequisites) {
             struct ctl_context ctx;
 
-            ds_init(&c->output);
-            c->table = NULL;
+            ctl_command_init_output(c);
 
             ctl_context_init(&ctx, c, idl, NULL, NULL, NULL);
             (c->syntax->prerequisites)(&ctx);
@@ -3827,8 +3826,7 @@ do_nbctl(const char *args, struct ctl_command *commands, size_t n_commands,
 
     symtab = ovsdb_symbol_table_create();
     for (c = commands; c < &commands[n_commands]; c++) {
-        ds_init(&c->output);
-        c->table = NULL;
+        ctl_command_init_output(c);
     }
     ctl_context_init(&ctx, NULL, idl, txn, symtab, NULL);
     for (c = commands; c < &commands[n_commands]; c++) {

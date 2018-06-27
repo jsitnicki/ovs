@@ -2520,8 +2520,7 @@ run_prerequisites(struct ctl_command *commands, size_t n_commands,
         if (c->syntax->prerequisites) {
             struct vsctl_context vsctl_ctx;
 
-            ds_init(&c->output);
-            c->table = NULL;
+            ctl_command_init_output(c);
 
             vsctl_context_init(&vsctl_ctx, c, idl, NULL, NULL, NULL);
             (c->syntax->prerequisites)(&vsctl_ctx.base);
@@ -2611,8 +2610,7 @@ do_vsctl(const char *args, struct ctl_command *commands, size_t n_commands,
     post_db_reload_check_init();
     symtab = ovsdb_symbol_table_create();
     for (c = commands; c < &commands[n_commands]; c++) {
-        ds_init(&c->output);
-        c->table = NULL;
+        ctl_command_init_output(c);
     }
     vsctl_context_init(&vsctl_ctx, NULL, idl, txn, ovs, symtab);
     for (c = commands; c < &commands[n_commands]; c++) {

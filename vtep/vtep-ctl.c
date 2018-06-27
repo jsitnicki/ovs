@@ -2256,8 +2256,7 @@ run_prerequisites(struct ctl_command *commands, size_t n_commands,
         if (c->syntax->prerequisites) {
             struct vtep_ctl_context vtepctl_ctx;
 
-            ds_init(&c->output);
-            c->table = NULL;
+            ctl_command_init_output(c);
 
             vtep_ctl_context_init(&vtepctl_ctx, c, idl, NULL, NULL, NULL);
             (c->syntax->prerequisites)(&vtepctl_ctx.base);
@@ -2297,8 +2296,7 @@ do_vtep_ctl(const char *args, struct ctl_command *commands,
 
     symtab = ovsdb_symbol_table_create();
     for (c = commands; c < &commands[n_commands]; c++) {
-        ds_init(&c->output);
-        c->table = NULL;
+        ctl_command_init_output(c);
     }
     vtep_ctl_context_init(&vtepctl_ctx, NULL, idl, txn, vtep_global, symtab);
     for (c = commands; c < &commands[n_commands]; c++) {

@@ -155,6 +155,8 @@ struct ctl_command {
     struct table *table;
 };
 
+void ctl_command_init_output(struct ctl_command *);
+
 bool ctl_might_write_to_db(const struct ctl_command *, size_t n);
 const char *ctl_get_db_cmd_usage(void);
 

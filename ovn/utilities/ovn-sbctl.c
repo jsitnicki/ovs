@@ -1229,8 +1229,7 @@ run_prerequisites(struct ctl_command *commands, size_t n_commands,
         if (c->syntax->prerequisites) {
             struct sbctl_context sbctl_ctx;
 
-            ds_init(&c->output);
-            c->table = NULL;
+            ctl_command_init_output(c);
 
             sbctl_context_init(&sbctl_ctx, c, idl, NULL, NULL);
             (c->syntax->prerequisites)(&sbctl_ctx.base);
@@ -1269,8 +1268,7 @@ do_sbctl(const char *args, struct ctl_command *commands, size_t n_commands,
 
     symtab = ovsdb_symbol_table_create();
     for (c = commands; c < &commands[n_commands]; c++) {
-        ds_init(&c->output);
-        c->table = NULL;
+        ctl_command_init_output(c);
     }
     sbctl_context_init(&sbctl_ctx, NULL, idl, txn, symtab);
     for (c = commands; c < &commands[n_commands]; c++) {

@@ -2042,6 +2042,16 @@ ctl_default_db(void)
     return def;
 }
 
+/* Initializes 'command' fields that store generated output. */
+void
+ctl_command_init_output(struct ctl_command *command)
+{
+    ovs_assert(command);
+
+    ds_init(&command->output);
+    command->table = NULL;
+}
+
 /* Returns true if it looks like this set of arguments might modify the
  * database, otherwise false.  (Not very smart, so it's prone to false
  * positives.) */
