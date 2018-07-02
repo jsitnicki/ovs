@@ -2437,6 +2437,28 @@ ctl_register_commands(const struct ctl_command_syntax *commands)
     }
 }
 
+/* Gets an array of pointers to all registered commands ('struct
+ * ctl_command_syntax' objects). Last element of the array is NULL.  Caller
+ * must free() the returned array but not the elements. */
+const struct ctl_command_syntax **
+ctl_get_registered_commands(void)
+{
+    const struct ctl_command_syntax **commands;
+    const struct shash_node *node;
+    size_t i, n;
+
+    n = shash_count(&all_commands);
+    commands = xmalloc((n + 1) * sizeof *commands);
+
+    i = 0;
+    SHASH_FOR_EACH (node, &all_commands) {
+        commands[i++] = node->data;
+    }
+    commands[i] = NULL;
+
+    return commands;
+}
+
 /* Registers the 'db_ctl_commands' to 'all_commands'. */
 void
 ctl_init__(const struct ovsdb_idl_class *idl_class_,
