@@ -2459,6 +2459,14 @@ ctl_get_registered_commands(void)
     return commands;
 }
 
+/* Gets 'struct ctl_command' for the command that was registered under the
+ * given name. */
+const struct ctl_command_syntax *
+ctl_get_command_by_name(const char *name)
+{
+    return shash_find_data(&all_commands, name);
+}
+
 /* Registers the 'db_ctl_commands' to 'all_commands'. */
 void
 ctl_init__(const struct ovsdb_idl_class *idl_class_,
