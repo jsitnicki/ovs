@@ -4448,6 +4448,7 @@ nbctl_server_command(struct unixctl_conn *conn, int argc, const char *argv[],
             .options = SHASH_INITIALIZER(&commands[0].options),
         }
     };
+    run_prerequisites(commands, ARRAY_SIZE(commands), idl);
     client_main_loop(idl, args, commands, ARRAY_SIZE(commands));
 
     struct ctl_command *c = &commands[0];
@@ -4625,10 +4626,6 @@ static void
 server_register_command(const struct ctl_command_syntax *command,
                         struct ovsdb_idl *idl)
 {
-    /* XXX: Skip commands w/ pre-run and post-run callbacks for now. */
-    if (command->prerequisites || command->postprocess) {
-        return;
-    }
     unixctl_command_register(command->name, command->arguments,
                              command->min_args, command->max_args,
                              nbctl_server_command, idl);
