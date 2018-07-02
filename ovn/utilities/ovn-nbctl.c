@@ -4648,19 +4648,21 @@ server_register_command(const struct ctl_command_syntax *command,
 }
 
 static void
-server_register_commands(const struct ctl_command_syntax *commands,
-                         struct ovsdb_idl *idl)
+server_register_commands(struct ovsdb_idl *idl)
 {
-    const struct ctl_command_syntax *p;
+    const struct ctl_command_syntax **commands;
+    const struct ctl_command_syntax **p;
 
-    for (p = commands; p->name; p++) {
-        server_register_command(p, idl);
+    commands = ctl_get_registered_commands();
+    for (p = commands; *p != NULL; p++) {
+        server_register_command(*p, idl);
     }
+    free(commands);
 }
 
 static void
 server_commands_init(struct ovsdb_idl *idl, bool *exiting)
 {
     unixctl_command_register("exit", "", 0, 0, nbctl_server_exit, exiting);
-    server_register_commands(nbctl_commands, idl);
+    server_register_commands(idl);
 }
