@@ -4429,7 +4429,7 @@ nbctl_server_command(struct unixctl_conn *conn, int argc, const char *argv[],
 {
     struct ovsdb_idl *idl = idl_;
 
-    const struct ctl_command_syntax *syntax = find_command_syntax(argv[0]);
+    const struct ctl_command_syntax *syntax = ctl_get_command_by_name(argv[0]);
     ovs_assert(syntax);
 
     VLOG_INFO("%s cb: Got %d args", syntax->name, argc);
@@ -4612,19 +4612,6 @@ static const struct ctl_command_syntax nbctl_commands[] = {
 
     {NULL, 0, 0, NULL, NULL, NULL, NULL, "", RO},
 };
-
-const struct ctl_command_syntax *
-find_command_syntax(const char *name)
-{
-    const struct ctl_command_syntax *p;
-
-    for (p = nbctl_commands; p->name != NULL; p++) {
-        if (!strcmp(p->name, name)) {
-            return p;
-        }
-    }
-    return NULL;
-}
 
 /* Registers nbctl and common db commands. */
 static void
