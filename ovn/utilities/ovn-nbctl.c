@@ -4220,7 +4220,6 @@ do_nbctl(const char *args, struct ctl_command *commands, size_t n_commands,
     struct ctl_command *c;
     struct shash_node *node;
     int64_t next_cfg = 0;
-    char *error = NULL;
 
     ovs_assert(retry);
 
@@ -4301,7 +4300,6 @@ do_nbctl(const char *args, struct ctl_command *commands, size_t n_commands,
             }
         }
     }
-    error = xstrdup(ovsdb_idl_txn_get_error(txn));
 
     switch (status) {
     case TXN_UNCOMMITTED:
@@ -4320,7 +4318,7 @@ do_nbctl(const char *args, struct ctl_command *commands, size_t n_commands,
         goto try_again;
 
     case TXN_ERROR:
-        ctl_fatal("transaction error: %s", error);
+        ctl_fatal("transaction error: %s", ovsdb_idl_txn_get_error(txn));
 
     case TXN_NOT_LOCKED:
         /* Should not happen--we never call ovsdb_idl_set_lock(). */
@@ -4329,7 +4327,6 @@ do_nbctl(const char *args, struct ctl_command *commands, size_t n_commands,
     default:
         OVS_NOT_REACHED();
     }
-    free(error);
 
     ovsdb_symbol_table_destroy(symtab);
 
@@ -4399,7 +4396,6 @@ try_again:
         table_destroy(c->table);
         free(c->table);
     }
-    free(error);
     *retry = true;
     return;
 }
