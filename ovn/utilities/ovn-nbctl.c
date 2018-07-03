@@ -100,8 +100,9 @@ static const struct nbrec_dhcp_options *dhcp_options_get(
 static unixctl_cb_func nbctl_server_exit;
 static unixctl_cb_func nbctl_server_command;
 
-static void client_main_loop(struct ovsdb_idl *idl, const char *args,
-                             struct ctl_command *commands, size_t n_commands);
+static char * OVS_WARN_UNUSED_RESULT client_main_loop(
+    struct ovsdb_idl *idl, const char *args, struct ctl_command *commands,
+    size_t n_commands);
 static void server_main_loop(struct ovsdb_idl *idl);
 static void server_commands_init(struct ovsdb_idl *idl, bool *exiting);
 const struct ctl_command_syntax *find_command_syntax(const char *name);
@@ -157,7 +158,10 @@ main(int argc, char *argv[])
     if (get_detach()) {
         server_main_loop(idl);
     } else {
-        client_main_loop(idl, args, commands, n_commands);
+        error = client_main_loop(idl, args, commands, n_commands);
+        if (error) {
+            ctl_fatal("%s", error);
+        }
         for (struct ctl_command *c = commands; c < &commands[n_commands]; c++) {
             ds_destroy(&c->output);
             table_destroy(c->table);
@@ -174,7 +178,7 @@ main(int argc, char *argv[])
     exit(EXIT_SUCCESS);
 }
 
-static void
+static char *
 client_main_loop(struct ovsdb_idl *idl, const char *args,
                  struct ctl_command *commands, size_t n_commands)
 {
@@ -211,10 +215,10 @@ client_main_loop(struct ovsdb_idl *idl, const char *args,
             bool retry;
             char *error = do_nbctl(args, commands, n_commands, idl, &retry);
             if (error) {
-                ctl_fatal("%s", error);
+                return error;
             }
             if (!retry) {
-                return;
+                return NULL;
             }
         }
 
@@ -224,6 +228,8 @@ client_main_loop(struct ovsdb_idl *idl, const char *args,
             poll_block();
         }
     }
+
+    return NULL;
 }
 
 static void
@@ -4482,7 +4488,11 @@ nbctl_server_command(struct unixctl_conn *conn, int argc, const char *argv[],
         unixctl_command_reply_error(conn, error);
         goto out;
     }
-    client_main_loop(idl, args, commands, ARRAY_SIZE(commands));
+    error = client_main_loop(idl, args, commands, ARRAY_SIZE(commands));
+    if (error) {
+        unixctl_command_reply_error(conn, error);
+        goto out;
+    }
 
     struct ctl_command *c = &commands[0];
     unixctl_command_reply(conn, ds_cstr_ro(&c->output));
