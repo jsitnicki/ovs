@@ -84,8 +84,8 @@ OVS_NO_RETURN static void usage(void);
 static void parse_options(int argc, char *argv[], struct shash *local_options);
 static void run_prerequisites(struct ctl_command[], size_t n_commands,
                               struct ovsdb_idl *);
-static bool do_nbctl(const char *args, struct ctl_command *, size_t n,
-                     struct ovsdb_idl *);
+static void do_nbctl(const char *args, struct ctl_command *, size_t n,
+                     struct ovsdb_idl *, bool *retry);
 static const struct nbrec_dhcp_options *dhcp_options_get(
     struct ctl_context *ctx, const char *id, bool must_exist);
 static void main_loop(const char *args, struct ctl_command *commands,
@@ -164,7 +164,10 @@ main_loop(const char *args, struct ctl_command *commands, size_t n_commands,
 
         if (seqno != ovsdb_idl_get_seqno(idl)) {
             seqno = ovsdb_idl_get_seqno(idl);
-            if (do_nbctl(args, commands, n_commands, idl)) {
+
+            bool retry;
+            do_nbctl(args, commands, n_commands, idl, &retry);
+            if (!retry) {
                 return;
             }
         }
@@ -4137,9 +4140,9 @@ run_prerequisites(struct ctl_command *commands, size_t n_commands,
     }
 }
 
-static bool
+static void
 do_nbctl(const char *args, struct ctl_command *commands, size_t n_commands,
-         struct ovsdb_idl *idl)
+         struct ovsdb_idl *idl, bool *retry)
 {
     struct ovsdb_idl_txn *txn;
     enum ovsdb_idl_txn_status status;
@@ -4149,6 +4152,8 @@ do_nbctl(const char *args, struct ctl_command *commands, size_t n_commands,
     struct shash_node *node;
     int64_t next_cfg = 0;
     char *error = NULL;
+
+    ovs_assert(retry);
 
     txn = the_idl_txn = ovsdb_idl_txn_create(idl);
     if (dry_run) {
@@ -4309,7 +4314,8 @@ do_nbctl(const char *args, struct ctl_command *commands, size_t n_commands,
 
     ovsdb_idl_txn_destroy(txn);
 
-    return true;
+    *retry = false;
+    return;
 
 try_again:
     /* Our transaction needs to be rerun, or a prerequisite was not met.  Free
@@ -4325,7 +4331,8 @@ try_again:
         free(c->table);
     }
     free(error);
-    return false;
+    *retry = true;
+    return;
 }
 
 /* Frees the current transaction and the underlying IDL and then calls
