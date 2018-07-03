@@ -88,8 +88,9 @@ static char *unixctl_path;
 static void nbctl_cmd_init(void);
 OVS_NO_RETURN static void usage(void);
 static void parse_options(int argc, char *argv[], struct shash *local_options);
-static void run_prerequisites(struct ctl_command[], size_t n_commands,
-                              struct ovsdb_idl *);
+static char * OVS_WARN_UNUSED_RESULT run_prerequisites(struct ctl_command[],
+                                                       size_t n_commands,
+                                                       struct ovsdb_idl *);
 static void do_nbctl(const char *args, struct ctl_command *, size_t n,
                      struct ovsdb_idl *, bool *retry);
 static const struct nbrec_dhcp_options *dhcp_options_get(
@@ -112,6 +113,7 @@ main(int argc, char *argv[])
     struct ctl_command *commands = NULL;
     struct shash local_options;
     size_t n_commands = 0;
+    char *error;
 
     set_program_name(argv[0]);
     fatal_ignore_sigpipe();
@@ -146,7 +148,10 @@ main(int argc, char *argv[])
     /* Initialize IDL. */
     idl = the_idl = ovsdb_idl_create(db, &nbrec_idl_class, true, false);
     ovsdb_idl_set_leader_only(idl, leader_only);
-    run_prerequisites(commands, n_commands, idl);
+    error = run_prerequisites(commands, n_commands, idl);
+    if (error) {
+        ctl_fatal("%s", error);
+    }
 
     if (get_detach()) {
         server_main_loop(idl);
@@ -4178,7 +4183,7 @@ static const struct ctl_table_class tables[NBREC_N_TABLES] = {
     [NBREC_TABLE_ACL].row_ids[0] = {&nbrec_acl_col_name, NULL, NULL},
 };
 
-static void
+static char *
 run_prerequisites(struct ctl_command *commands, size_t n_commands,
                   struct ovsdb_idl *idl)
 {
@@ -4199,7 +4204,9 @@ run_prerequisites(struct ctl_command *commands, size_t n_commands,
             ctl_context_init(&ctx, c, idl, NULL, NULL, NULL);
             (c->syntax->prerequisites)(&ctx);
             if (ctx.error) {
-                ctl_fatal("%s", ctx.error);
+                char *error = xstrdup(ctx.error);
+                ctl_context_done(&ctx, c);
+                return error;
             }
             ctl_context_done(&ctx, c);
 
@@ -4207,6 +4214,8 @@ run_prerequisites(struct ctl_command *commands, size_t n_commands,
             ovs_assert(!c->table);
         }
     }
+
+    return NULL;
 }
 
 static void
@@ -4431,6 +4440,7 @@ nbctl_server_command(struct unixctl_conn *conn, int argc, const char *argv[],
                      void *idl_)
 {
     struct ovsdb_idl *idl = idl_;
+    char *error = NULL;
 
     const struct ctl_command_syntax *syntax = ctl_get_command_by_name(argv[0]);
     ovs_assert(syntax);
@@ -4451,7 +4461,11 @@ nbctl_server_command(struct unixctl_conn *conn, int argc, const char *argv[],
             .options = SHASH_INITIALIZER(&commands[0].options),
         }
     };
-    run_prerequisites(commands, ARRAY_SIZE(commands), idl);
+    error = run_prerequisites(commands, ARRAY_SIZE(commands), idl);
+    if (error) {
+        unixctl_command_reply_error(conn, error);
+        goto out;
+    }
     client_main_loop(idl, args, commands, ARRAY_SIZE(commands));
 
     struct ctl_command *c = &commands[0];
@@ -4463,6 +4477,8 @@ nbctl_server_command(struct unixctl_conn *conn, int argc, const char *argv[],
     free(c->table);
     shash_destroy_free_data(&c->options);
 
+out:
+    free(error);
     free(args);
 }
 
