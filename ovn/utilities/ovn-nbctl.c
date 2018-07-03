@@ -82,8 +82,9 @@ static int leader_only = true;
 static void nbctl_cmd_init(void);
 OVS_NO_RETURN static void usage(void);
 static void parse_options(int argc, char *argv[], struct shash *local_options);
-static void run_prerequisites(struct ctl_command[], size_t n_commands,
-                              struct ovsdb_idl *);
+static char * OVS_WARN_UNUSED_RESULT run_prerequisites(struct ctl_command[],
+                                                       size_t n_commands,
+                                                       struct ovsdb_idl *);
 static char * OVS_WARN_UNUSED_RESULT do_nbctl(const char *args,
                                               struct ctl_command *, size_t n,
                                               struct ovsdb_idl *, bool *retry);
@@ -101,6 +102,7 @@ main(int argc, char *argv[])
     struct ctl_command *commands;
     struct shash local_options;
     size_t n_commands;
+    char *error;
 
     set_program_name(argv[0]);
     fatal_ignore_sigpipe();
@@ -125,9 +127,12 @@ main(int argc, char *argv[])
     /* Initialize IDL. */
     idl = the_idl = ovsdb_idl_create(db, &nbrec_idl_class, true, false);
     ovsdb_idl_set_leader_only(idl, leader_only);
-    run_prerequisites(commands, n_commands, idl);
+    error = run_prerequisites(commands, n_commands, idl);
+    if (error) {
+        ctl_fatal("%s", error);
+    }
 
-    char *error = main_loop(args, commands, n_commands, idl);
+    error = main_loop(args, commands, n_commands, idl);
     if (error) {
         ctl_fatal("%s", error);
     }
@@ -4117,7 +4122,7 @@ static const struct ctl_table_class tables[NBREC_N_TABLES] = {
     [NBREC_TABLE_ACL].row_ids[0] = {&nbrec_acl_col_name, NULL, NULL},
 };
 
-static void
+static char *
 run_prerequisites(struct ctl_command *commands, size_t n_commands,
                   struct ovsdb_idl *idl)
 {
@@ -4138,7 +4143,9 @@ run_prerequisites(struct ctl_command *commands, size_t n_commands,
             ctl_context_init(&ctx, c, idl, NULL, NULL, NULL);
             (c->syntax->prerequisites)(&ctx);
             if (ctx.error) {
-                ctl_fatal("%s", ctx.error);
+                char *error = xstrdup(ctx.error);
+                ctl_context_done(&ctx, c);
+                return error;
             }
             ctl_context_done(&ctx, c);
 
@@ -4146,6 +4153,8 @@ run_prerequisites(struct ctl_command *commands, size_t n_commands,
             ovs_assert(!c->table);
         }
     }
+
+    return NULL;
 }
 
 static char *
