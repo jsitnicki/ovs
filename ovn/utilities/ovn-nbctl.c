@@ -4324,7 +4324,6 @@ try_again:
         table_destroy(c->table);
         free(c->table);
     }
-    free(error);
     *retry = true;
 }
 
