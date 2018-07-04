@@ -85,6 +85,9 @@ static int leader_only = true;
      commands. */
 static char *unixctl_path;
 
+/** --server: Run as unixctl server */
+static int server_mode = false;
+
 static void nbctl_cmd_init(void);
 OVS_NO_RETURN static void usage(void);
 static void parse_options(int argc, char *argv[], struct shash *local_options);
@@ -131,7 +134,7 @@ main(int argc, char *argv[])
     argc -= optind;
     argv += optind;
 
-    if (get_detach()) {
+    if (server_mode) {
         if (argc != 0) {
             ctl_fatal("non-option arguments not supported with --detach "
                       "(use --help for help)");
@@ -155,7 +158,7 @@ main(int argc, char *argv[])
         ctl_fatal("%s", error);
     }
 
-    if (get_detach()) {
+    if (server_mode) {
         server_main_loop(idl);
     } else {
         error = client_main_loop(idl, args, commands, n_commands);
@@ -298,6 +301,7 @@ parse_options(int argc, char *argv[], struct shash *local_options)
         STREAM_SSL_LONG_OPTIONS,
         {"bootstrap-ca-cert", required_argument, NULL, OPT_BOOTSTRAP_CA_CERT},
         TABLE_LONG_OPTIONS,
+        {"server", no_argument, &server_mode, true},
         {NULL, 0, NULL, 0},
     };
     const int n_global_long_options = ARRAY_SIZE(global_long_options) - 1;
