@@ -4463,6 +4463,58 @@ nbctl_server_exit(struct unixctl_conn *conn, int argc OVS_UNUSED,
 }
 
 static void
+nbctl_server_run(struct unixctl_conn *conn, int argc, const char **argv_,
+                 void *idl_)
+{
+    struct ovsdb_idl *idl = idl_;
+    struct ctl_command *commands = NULL;
+    struct shash local_options;
+    size_t n_commands = 0;
+
+    char **argv = xcalloc(argc + 1, sizeof *argv);
+    for (int i = 0; i < argc; i++) {
+        argv[i] = xstrdup(argv_[i]);
+    }
+
+    /* Parse command line. */
+    char *args = process_escape_args(argv);
+    shash_init(&local_options);
+    optind = 1; /* XXX: push down to parse_options() */
+    parse_options(argc, argv, &local_options);
+
+    commands = ctl_parse_commands(argc - optind, argv + optind,
+                                  &local_options, &n_commands);
+    VLOG(ctl_might_write_to_db(commands, n_commands) ? VLL_INFO : VLL_DBG,
+         "Called as %s", args);
+
+    /* XXX: Timeout handling */
+
+    for (struct ctl_command *c = commands; c < &commands[n_commands]; c++) {
+        struct shash_node *node;
+
+        VLOG_INFO("Runing command '%s'", c->syntax->name);
+        SHASH_FOR_EACH (node, &c->options) {
+            const char *s = node->name;
+            VLOG_INFO("  with option '%s'", s);
+        }
+        for (int i = 0; i < c->argc; i++) {
+            VLOG_INFO("  with argument '%s'", c->argv[i]);
+        }
+
+        shash_destroy_free_data(&c->options);
+    }
+
+    unixctl_command_reply(conn, NULL);
+
+    free(commands);
+    free(args);
+    for (int i = 0; i < argc; i++) {
+        free(argv[i]);
+    }
+    free(argv);
+}
+
+static void
 nbctl_server_command(struct unixctl_conn *conn, int argc, const char *argv[],
                      void *idl_)
 {
@@ -4698,5 +4750,6 @@ static void
 server_commands_init(struct ovsdb_idl *idl, bool *exiting)
 {
     unixctl_command_register("exit", "", 0, 0, nbctl_server_exit, exiting);
+    unixctl_command_register("run", "", 1, INT_MAX, nbctl_server_run, idl);
     server_register_commands(idl);
 }
