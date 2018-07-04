@@ -241,7 +241,7 @@ server_main_loop(struct ovsdb_idl *idl)
     VLOG_INFO("Running in server mode...");
 
     /* XXX: Don't daemonize yet */
-    /* daemonize_start(false); */
+    daemonize_start(false);
     int error = unixctl_server_create(unixctl_path, &server);
     if (error) {
         ctl_fatal("failed to create unixctl server (%s)",
@@ -251,6 +251,7 @@ server_main_loop(struct ovsdb_idl *idl)
 
     for (;;) {
         unixctl_server_run(server);
+        daemonize_complete();
         unixctl_server_wait(server);
         if (exiting) {
             break;
