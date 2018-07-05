@@ -4455,7 +4455,7 @@ nbctl_exit(int status)
 
 static void
 nbctl_server_exit(struct unixctl_conn *conn, int argc OVS_UNUSED,
-            const char *argv[] OVS_UNUSED, void *exiting_)
+                  const char *argv[] OVS_UNUSED, void *exiting_)
 {
     bool *exiting = exiting_;
     *exiting = true;
