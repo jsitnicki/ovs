@@ -4470,6 +4470,7 @@ nbctl_server_run(struct unixctl_conn *conn, int argc, const char **argv_,
     struct ctl_command *commands = NULL;
     struct shash local_options;
     size_t n_commands = 0;
+    char *error = NULL;
 
     char **argv = xcalloc(argc + 1, sizeof *argv);
     for (int i = 0; i < argc; i++) {
@@ -4489,24 +4490,32 @@ nbctl_server_run(struct unixctl_conn *conn, int argc, const char **argv_,
 
     /* XXX: Timeout handling */
 
+    error = client_main_loop(idl, args, commands, n_commands);
+    if (error) {
+        unixctl_command_reply_error(conn, error);
+        goto out;
+    }
+
+    struct ds output = DS_EMPTY_INITIALIZER;
     for (struct ctl_command *c = commands; c < &commands[n_commands]; c++) {
-        struct shash_node *node;
+        /* XXX: Support for table output */
+        ds_put_cstr(&output, ds_cstr_ro(&c->output));
+    }
+    unixctl_command_reply(conn, ds_cstr_ro(&output));
+    ds_destroy(&output);
 
-        VLOG_INFO("Runing command '%s'", c->syntax->name);
-        SHASH_FOR_EACH (node, &c->options) {
-            const char *s = node->name;
-            VLOG_INFO("  with option '%s'", s);
-        }
-        for (int i = 0; i < c->argc; i++) {
-            VLOG_INFO("  with argument '%s'", c->argv[i]);
-        }
-
+out:
+    for (struct ctl_command *c = commands; c < &commands[n_commands]; c++) {
+        /* XXX: Extract a destructor. */
+        ds_destroy(&c->output);
+        table_destroy(c->table);
+        free(c->table);
         shash_destroy_free_data(&c->options);
     }
 
-    unixctl_command_reply(conn, NULL);
-
+    free(error);
     free(commands);
+    shash_destroy_free_data(&local_options);
     free(args);
     for (int i = 0; i < argc; i++) {
         free(argv[i]);
