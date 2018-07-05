@@ -11,8 +11,7 @@ m4_define([OVN_NBCTL_TEST_START],
    on_exit "kill `cat ovsdb-server.pid`"
 
    dnl Start ovn-nbctl server
-   command ovn-nbctl --server --pidfile --log-file &
-   on_exit "kill `cat ovn-nbctl.pid`"
+   start_daemon ovn-nbctl --server
 
    AT_CHECK([ovn-nbctl init])
    AT_CHECK([[sed < stderr '
@@ -31,7 +30,21 @@ m4_define([OVN_NBCTL_TEST_STOP],
 m4_divert_push([PREPARE_TESTS])
 [
 OVN_NBCTL_CLIENT () {
-    ovs-appctl -t ovn-nbctl "$@"
+    local rc=0
+
+    # Run ovs-appctl filtering just its stderr.
+    exec 3>&1
+    ovs-appctl -t ovn-nbctl run "$@" 2>&1 >&3 3>&- | sed '/^ovs-appctl:/d;s/^/ovn-nbctl: /' 1>&2 3>&-
+    rc=$PIPESTATUS
+    exec 3>&-
+
+    # Map ovs-appctl exit status to ones from ovn-nbctl
+    if [ $rc -eq 0 ]; then
+        rc=0
+    else
+        rc=1
+    fi
+    return $rc
 }
 alias ovn-nbctl='OVN_NBCTL_CLIENT'
 ]
