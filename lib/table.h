@@ -82,7 +82,8 @@ struct table_style {
     int max_column_width;       /* CF_STRING: Limit for column width. */
 };
 
-#define TABLE_STYLE_DEFAULT { TF_LIST, CF_STRING, true, JSSF_SORT, 0 }
+#define TABLE_STYLE_DEFAULT                     \
+    (struct table_style) { TF_LIST, CF_STRING, true, JSSF_SORT, 0 }
 
 #define TABLE_OPTION_ENUMS                      \
     OPT_NO_HEADINGS,                            \
