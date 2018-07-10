@@ -50,7 +50,7 @@ OVN_NBCTL_CLIENT () {
     fi
     return $rc
 }
-alias ovn-nbctl='OVN_NBCTL_CLIENT'
+# alias ovn-nbctl='OVN_NBCTL_CLIENT'
 ]
 m4_divert_pop([PREPARE_TESTS])
 

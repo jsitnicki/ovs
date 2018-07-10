@@ -145,6 +145,9 @@ m4_define([OVN_CLEANUP_SBOX],[
 # Gracefully terminate all OVN daemons, including those in the
 # specified sandbox instances.
 m4_define([OVN_CLEANUP],[
+    as nbctl
+    OVS_APP_EXIT_AND_WAIT([ovn-nbctl])
+
     m4_foreach([sbox], [$@], [
         OVN_CLEANUP_SBOX([sbox])
     ])
@@ -203,6 +206,10 @@ ovn_start () {
     as northd-backup start_daemon ovn-northd \
                --ovnnb-db=unix:"$ovs_base"/ovn-nb/ovn-nb.sock \
                --ovnsb-db=unix:"$ovs_base"/ovn-sb/ovn-sb.sock
+
+    echo "starting ovn-nbctl daemon"
+    mkdir "$ovs_base"/nbctl
+    as nbctl start_daemon ovn-nbctl
 }
 
 # Interconnection networks.
@@ -505,5 +512,3 @@ m4_define([WAIT_FOR_DUMMY_PORTS], \
       [  \
          OVS_WAIT_WHILE([ovs-appctl netdev-dummy/conn-state dummy_port \
                   | grep 'unknown\|disconnected'])])])
-
-
