@@ -1,3 +1,9 @@
+m4_divert_push([PREPARE_TESTS])
+[
+alias ovn-nbctl='as nbctl OVN_NBCTL_CLIENT'
+]
+m4_divert_pop([PREPARE_TESTS])
+
 # OVN_CHECK_PACKETS([PCAP], [EXPECTED])
 #
 # This compares packets read from PCAP, in pcap format, to those read
@@ -6390,6 +6396,8 @@ start_daemon ovsdb-server --remote=punix:ovnnb_db.sock \
                           --certificate=db:OVN_Northbound,SSL,certificate \
                           --ca-cert=db:OVN_Northbound,SSL,ca_cert \
                           ovn-nb.db
+
+start_daemon ovn-nbctl
 
 # Populate SSL configuration entries in nb db
 AT_CHECK(
