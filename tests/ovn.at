@@ -1,3 +1,9 @@
+m4_divert_push([PREPARE_TESTS])
+[
+alias ovn-nbctl='as nbctl OVN_NBCTL_CLIENT'
+]
+m4_divert_pop([PREPARE_TESTS])
+
 # OVN_CHECK_PACKETS([PCAP], [EXPECTED])
 #
 # This compares packets read from PCAP, in pcap format, to those read
@@ -6391,6 +6397,8 @@ start_daemon ovsdb-server --remote=punix:ovnnb_db.sock \
                           --ca-cert=db:OVN_Northbound,SSL,ca_cert \
                           ovn-nb.db
 
+start_daemon ovn-nbctl
+
 # Populate SSL configuration entries in nb db
 AT_CHECK(
     [ovn-nbctl set-ssl $PKIDIR/testpki-privkey.pem \
@@ -6402,26 +6410,18 @@ AT_CHECK([ovn-nbctl set-connection pssl:0:127.0.0.1], [0], [stdout], [ignore])
 
 PARSE_LISTENING_PORT([ovsdb-server.log], [TCP_PORT])
 
-# Verify SSL connetivity to nb db server
-AT_CHECK([ovn-nbctl --db=ssl:127.0.0.1:$TCP_PORT \
-                    --private-key=$PKIDIR/testpki-privkey.pem \
-                    --certificate=$PKIDIR/testpki-cert.pem \
-                    --ca-cert=$PKIDIR/testpki-cacert.pem \
-          list NB_Global],
-         [0], [stdout], [ignore])
-AT_CHECK([ovn-nbctl --db=ssl:127.0.0.1:$TCP_PORT \
-                    --private-key=$PKIDIR/testpki-privkey.pem \
-                    --certificate=$PKIDIR/testpki-cert.pem \
-                    --ca-cert=$PKIDIR/testpki-cacert.pem \
-          list Connection],
-         [0], [stdout], [ignore])
-AT_CHECK([ovn-nbctl --db=ssl:127.0.0.1:$TCP_PORT \
-                    --private-key=$PKIDIR/testpki-privkey.pem \
-                    --certificate=$PKIDIR/testpki-cert.pem \
-                    --ca-cert=$PKIDIR/testpki-cacert.pem \
-          get-connection],
-         [0], [stdout], [ignore])
+OVS_APP_EXIT_AND_WAIT([ovn-nbctl])
+start_daemon ovn-nbctl --db=ssl:127.0.0.1:$TCP_PORT \
+                       --private-key=$PKIDIR/testpki-privkey.pem \
+                       --certificate=$PKIDIR/testpki-cert.pem \
+                       --ca-cert=$PKIDIR/testpki-cacert.pem
 
+# Verify SSL connetivity to nb db server
+AT_CHECK([ovn-nbctl list NB_Global], [0], [stdout], [ignore])
+AT_CHECK([ovn-nbctl list Connection], [0], [stdout], [ignore])
+AT_CHECK([ovn-nbctl get-connection], [0], [stdout], [ignore])
+
+OVS_APP_EXIT_AND_WAIT([ovn-nbctl])
 OVS_APP_EXIT_AND_WAIT([ovsdb-server])
 AT_CLEANUP
 
