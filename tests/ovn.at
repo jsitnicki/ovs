@@ -10541,3 +10541,22 @@ OVN_CHECK_PACKETS([hv2/vif2-tx.pcap], [vif2.expected])
 
 OVN_CLEANUP([hv1], [hv2])
 AT_CLEANUP
+
+AT_SETUP([ovn -- sync])
+ovn_start
+
+AT_CHECK([ovn-nbctl get NB_Global . nb_cfg], [0], [dnl
+0
+])
+
+AT_CHECK([ovn-nbctl --wait=sb sync])
+AT_CHECK([ovn-nbctl get NB_Global . sb_cfg], [0], [dnl
+1
+])
+
+AT_CHECK([ovn-nbctl --wait=hv sync])
+AT_CHECK([ovn-nbctl get NB_Global . hv_cfg], [0], [dnl
+2
+])
+
+AT_CLEANUP
