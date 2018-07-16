@@ -1807,17 +1807,19 @@ qos_cmp(const void *qos1_, const void *qos2_)
     }
 }
 
-static const char *
-parse_direction(const char *arg)
+static char * OVS_WARN_UNUSED_RESULT
+parse_direction(const char *arg, const char **direction_p)
 {
     /* Validate direction.  Only require the first letter. */
     if (arg[0] == 't') {
-        return "to-lport";
+        *direction_p = "to-lport";
     } else if (arg[0] == 'f') {
-        return "from-lport";
+        *direction_p = "from-lport";
     } else {
-        ctl_fatal("%s: direction must be \"to-lport\" or \"from-lport\"", arg);
+        return xasprintf("%s: direction must be \"to-lport\" or "
+                         "\"from-lport\"", arg);
     }
+    return NULL;
 }
 
 static char * OVS_WARN_UNUSED_RESULT
@@ -1846,7 +1848,12 @@ nbctl_acl_add(struct ctl_context *ctx)
         return;
     }
 
-    const char *direction = parse_direction(ctx->argv[2]);
+    const char *direction;
+    error = parse_direction(ctx->argv[2], &direction);
+    if (error) {
+        ctx->error = error;
+        return;
+    }
     int64_t priority;
     error = parse_priority(ctx->argv[3], &priority);
     if (error) {
@@ -1940,7 +1947,11 @@ nbctl_acl_del(struct ctl_context *ctx)
         return;
     }
 
-    const char *direction = parse_direction(ctx->argv[2]);
+    const char *direction;
+    error = parse_direction(ctx->argv[2], &direction);
+    if (error) {
+        ctl_fatal("%s", error);
+    }
 
     size_t n_acls = pg ? pg->n_acls : ls->n_acls;
     struct nbrec_acl **acls = pg ? pg->acls : ls->acls;
@@ -2053,13 +2064,18 @@ static void
 nbctl_qos_add(struct ctl_context *ctx)
 {
     const struct nbrec_logical_switch *ls;
-    const char *direction = parse_direction(ctx->argv[2]);
+    const char *direction;
     int64_t priority;
     int64_t dscp = -1;
     int64_t rate = 0;
     int64_t burst = 0;
     char *error;
 
+    error = parse_direction(ctx->argv[2], &direction);
+    if (error) {
+        ctx->error = error;
+        return;
+    }
     error = parse_priority(ctx->argv[3], &priority);
     if (error) {
         ctx->error = error;
@@ -2170,7 +2186,12 @@ nbctl_qos_del(struct ctl_context *ctx)
         return;
     }
 
-    const char *direction = parse_direction(ctx->argv[2]);
+    const char *direction;
+    error = parse_direction(ctx->argv[2], &direction);
+    if (error) {
+        ctx->error = error;
+        return;
+    }
 
     /* If priority and match are not specified, delete all qos_rules with the
      * specified direction. */
