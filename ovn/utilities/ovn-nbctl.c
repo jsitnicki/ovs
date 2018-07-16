@@ -949,7 +949,8 @@ nbctl_show(struct ctl_context *ctx)
     if (ctx->argc == 2) {
         char *error = ls_by_name_or_uuid(ctx, ctx->argv[1], false, &ls);
         if (error) {
-            ctl_fatal("%s", error);
+            ctx->error = error;
+            return;
         }
         if (ls) {
             print_ls(ls, &ctx->output);
@@ -964,7 +965,8 @@ nbctl_show(struct ctl_context *ctx)
     if (ctx->argc == 2) {
         char *error = lr_by_name_or_uuid(ctx, ctx->argv[1], false, &lr);
         if (error) {
-            ctl_fatal("%s", error);
+            ctx->error = error;
+            return;
         }
         if (lr) {
             print_lr(lr, &ctx->output);
@@ -1262,7 +1264,8 @@ nbctl_lsp_del(struct ctl_context *ctx)
 
     char *error = lsp_by_name_or_uuid(ctx, ctx->argv[1], must_exist, &lsp);
     if (error) {
-        ctl_fatal("%s", error);
+        ctx->error = error;
+        return;
     }
     if (!lsp) {
         return;
@@ -1294,7 +1297,8 @@ nbctl_lsp_list(struct ctl_context *ctx)
 
     char *error = ls_by_name_or_uuid(ctx, id, true, &ls);
     if (error) {
-        ctl_fatal("%s", error);
+        ctx->error = error;
+        return;
     }
 
     smap_init(&lsps);
@@ -1319,7 +1323,8 @@ nbctl_lsp_get_parent(struct ctl_context *ctx)
 
     char *error = lsp_by_name_or_uuid(ctx, ctx->argv[1], true, &lsp);
     if (error) {
-        ctl_fatal("%s", error);
+        ctx->error = error;
+        return;
     }
     if (lsp->parent_name) {
         ds_put_format(&ctx->output, "%s\n", lsp->parent_name);
@@ -1333,7 +1338,8 @@ nbctl_lsp_get_tag(struct ctl_context *ctx)
 
     char *error = lsp_by_name_or_uuid(ctx, ctx->argv[1], true, &lsp);
     if (error) {
-        ctl_fatal("%s", error);
+        ctx->error = error;
+        return;
     }
     if (lsp->n_tag > 0) {
         ds_put_format(&ctx->output, "%"PRId64"\n", lsp->tag[0]);
@@ -1348,7 +1354,8 @@ nbctl_lsp_set_addresses(struct ctl_context *ctx)
 
     char *error = lsp_by_name_or_uuid(ctx, id, true, &lsp);
     if (error) {
-        ctl_fatal("%s", error);
+        ctx->error = error;
+        return;
     }
 
     int i;
@@ -1381,7 +1388,8 @@ nbctl_lsp_get_addresses(struct ctl_context *ctx)
 
     char *error = lsp_by_name_or_uuid(ctx, id, true, &lsp);
     if (error) {
-        ctl_fatal("%s", error);
+        ctx->error = error;
+        return;
     }
 
     svec_init(&addresses);
@@ -1403,7 +1411,8 @@ nbctl_lsp_set_port_security(struct ctl_context *ctx)
 
     char *error = lsp_by_name_or_uuid(ctx, id, true, &lsp);
     if (error) {
-        ctl_fatal("%s", error);
+        ctx->error = error;
+        return;
     }
     nbrec_logical_switch_port_set_port_security(lsp,
             (const char **) ctx->argv + 2, ctx->argc - 2);
@@ -1420,7 +1429,8 @@ nbctl_lsp_get_port_security(struct ctl_context *ctx)
 
     char *error = lsp_by_name_or_uuid(ctx, id, true, &lsp);
     if (error) {
-        ctl_fatal("%s", error);
+        ctx->error = error;
+        return;
     }
     svec_init(&addrs);
     for (i = 0; i < lsp->n_port_security; i++) {
@@ -1441,7 +1451,8 @@ nbctl_lsp_get_up(struct ctl_context *ctx)
 
     char *error = lsp_by_name_or_uuid(ctx, id, true, &lsp);
     if (error) {
-        ctl_fatal("%s", error);
+        ctx->error = error;
+        return;
     }
     ds_put_format(&ctx->output,
                   "%s\n", (lsp->up && *lsp->up) ? "up" : "down");
@@ -1472,12 +1483,14 @@ nbctl_lsp_set_enabled(struct ctl_context *ctx)
 
     char *error = lsp_by_name_or_uuid(ctx, id, true, &lsp);
     if (error) {
-        ctl_fatal("%s", error);
+        ctx->error = error;
+        return;
     }
     bool enabled;
     error = parse_enabled(state, &enabled);
     if (error) {
-        ctl_fatal("%s", error);
+        ctx->error = error;
+        return;
     }
     nbrec_logical_switch_port_set_enabled(lsp, &enabled, 1);
 }
@@ -1490,7 +1503,8 @@ nbctl_lsp_get_enabled(struct ctl_context *ctx)
 
     char *error = lsp_by_name_or_uuid(ctx, id, true, &lsp);
     if (error) {
-        ctl_fatal("%s", error);
+        ctx->error = error;
+        return;
     }
     ds_put_format(&ctx->output, "%s\n",
                   !lsp->enabled || *lsp->enabled ? "enabled" : "disabled");
@@ -1525,7 +1539,8 @@ nbctl_lsp_get_type(struct ctl_context *ctx)
 
     char *error = lsp_by_name_or_uuid(ctx, id, true, &lsp);
     if (error) {
-        ctl_fatal("%s", error);
+        ctx->error = error;
+        return;
     }
     ds_put_format(&ctx->output, "%s\n", lsp->type);
 }
@@ -1540,7 +1555,8 @@ nbctl_lsp_set_options(struct ctl_context *ctx)
 
     char *error = lsp_by_name_or_uuid(ctx, id, true, &lsp);
     if (error) {
-        ctl_fatal("%s", error);
+        ctx->error = error;
+        return;
     }
     for (i = 2; i < ctx->argc; i++) {
         char *key, *value;
@@ -1566,7 +1582,8 @@ nbctl_lsp_get_options(struct ctl_context *ctx)
 
     char *error = lsp_by_name_or_uuid(ctx, id, true, &lsp);
     if (error) {
-        ctl_fatal("%s", error);
+        ctx->error = error;
+        return;
     }
     SMAP_FOR_EACH(node, &lsp->options) {
         ds_put_format(&ctx->output, "%s=%s\n", node->key, node->value);
@@ -1581,13 +1598,15 @@ nbctl_lsp_set_dhcpv4_options(struct ctl_context *ctx)
 
     char *error = lsp_by_name_or_uuid(ctx, id, true, &lsp);
     if (error) {
-        ctl_fatal("%s", error);
+        ctx->error = error;
+        return;
     }
     const struct nbrec_dhcp_options *dhcp_opt = NULL;
     if (ctx->argc == 3 ) {
         error = dhcp_options_get(ctx, ctx->argv[2], true, &dhcp_opt);
         if (error) {
-            ctl_fatal("%s", error);
+            ctx->error = error;
+            return;
         }
     }
 
@@ -1611,13 +1630,15 @@ nbctl_lsp_set_dhcpv6_options(struct ctl_context *ctx)
 
     char *error = lsp_by_name_or_uuid(ctx, id, true, &lsp);
     if (error) {
-        ctl_fatal("%s", error);
+        ctx->error = error;
+        return;
     }
     const struct nbrec_dhcp_options *dhcp_opt = NULL;
     if (ctx->argc == 3) {
         error = dhcp_options_get(ctx, ctx->argv[2], true, &dhcp_opt);
         if (error) {
-            ctl_fatal("%s", error);
+            ctx->error = error;
+            return;
         }
     }
 
@@ -1641,7 +1662,8 @@ nbctl_lsp_get_dhcpv4_options(struct ctl_context *ctx)
 
     char *error = lsp_by_name_or_uuid(ctx, id, true, &lsp);
     if (error) {
-        ctl_fatal("%s", error);
+        ctx->error = error;
+        return;
     }
     if (lsp->dhcpv4_options) {
         ds_put_format(&ctx->output, UUID_FMT " (%s)\n",
@@ -1658,7 +1680,8 @@ nbctl_lsp_get_dhcpv6_options(struct ctl_context *ctx)
 
     char *error = lsp_by_name_or_uuid(ctx, id, true, &lsp);
     if (error) {
-        ctl_fatal("%s", error);
+        ctx->error = error;
+        return;
     }
     if (lsp->dhcpv6_options) {
         ds_put_format(&ctx->output, UUID_FMT " (%s)\n",
@@ -1759,7 +1782,8 @@ nbctl_acl_list(struct ctl_context *ctx)
 
     char *error = acl_cmd_get_pg_or_ls(ctx, &ls, &pg);
     if (error) {
-        ctl_fatal("%s", error);
+        ctx->error = error;
+        return;
     }
 
     size_t n_acls = pg ? pg->n_acls : ls->n_acls;
@@ -1938,7 +1962,8 @@ nbctl_acl_del(struct ctl_context *ctx)
 
     char *error = acl_cmd_get_pg_or_ls(ctx, &ls, &pg);
     if (error) {
-        ctl_fatal("%s", error);
+        ctx->error = error;
+        return;
     }
 
     if (ctx->argc == 2) {
@@ -1957,7 +1982,8 @@ nbctl_acl_del(struct ctl_context *ctx)
     const char *direction;
     error = parse_direction(ctx->argv[2], &direction);
     if (error) {
-        ctl_fatal("%s", error);
+        ctx->error = error;
+        return;
     }
 
     size_t n_acls = pg ? pg->n_acls : ls->n_acls;
@@ -1988,7 +2014,8 @@ nbctl_acl_del(struct ctl_context *ctx)
     int64_t priority;
     error = parse_priority(ctx->argv[3], &priority);
     if (error) {
-        ctl_fatal("%s", error);
+        ctx->error = error;
+        return;
     }
 
     if (ctx->argc == 4) {
@@ -2028,7 +2055,8 @@ nbctl_qos_list(struct ctl_context *ctx)
 
     char *error = ls_by_name_or_uuid(ctx, ctx->argv[1], true, &ls);
     if (error) {
-        ctl_fatal("%s", error);
+        ctx->error = error;
+        return;
     }
 
     qos_rules = xmalloc(sizeof *qos_rules * ls->n_qos_rules);
@@ -2182,7 +2210,8 @@ nbctl_qos_del(struct ctl_context *ctx)
     const struct nbrec_logical_switch *ls;
     char *error = ls_by_name_or_uuid(ctx, ctx->argv[1], true, &ls);
     if (error) {
-        ctl_fatal("%s", error);
+        ctx->error = error;
+        return;
     }
 
     if (ctx->argc == 2) {
@@ -2222,7 +2251,8 @@ nbctl_qos_del(struct ctl_context *ctx)
     int64_t priority;
     error = parse_priority(ctx->argv[3], &priority);
     if (error) {
-        ctl_fatal("%s", error);
+        ctx->error = error;
+        return;
     }
 
     if (ctx->argc == 4) {
@@ -2569,7 +2599,8 @@ nbctl_lr_lb_del(struct ctl_context *ctx)
     const struct nbrec_load_balancer *del_lb;
     char *error = lr_by_name_or_uuid(ctx, ctx->argv[1], true, &lr);
     if (error) {
-        ctl_fatal("%s", error);
+        ctx->error = error;
+        return;
     }
 
     if (ctx->argc == 2) {
@@ -2582,7 +2613,8 @@ nbctl_lr_lb_del(struct ctl_context *ctx)
 
     error = lb_by_name_or_uuid(ctx, ctx->argv[2], true, &del_lb);
     if (error) {
-        ctl_fatal("%s", error);
+        ctx->error = error;
+        return;
     }
     for (size_t i = 0; i < lr->n_load_balancer; i++) {
         const struct nbrec_load_balancer *lb
@@ -2620,7 +2652,8 @@ nbctl_lr_lb_list(struct ctl_context *ctx)
 
     char *error = lr_by_name_or_uuid(ctx, lr_name, true, &lr);
     if (error) {
-        ctl_fatal("%s", error);
+        ctx->error = error;
+        return;
     }
     for (int i = 0; i < lr->n_load_balancer; i++) {
         const struct nbrec_load_balancer *lb
@@ -2690,7 +2723,8 @@ nbctl_ls_lb_del(struct ctl_context *ctx)
     const struct nbrec_load_balancer *del_lb;
     char *error = ls_by_name_or_uuid(ctx, ctx->argv[1], true, &ls);
     if (error) {
-        ctl_fatal("%s", error);
+        ctx->error = error;
+        return;
     }
 
     if (ctx->argc == 2) {
@@ -2703,7 +2737,8 @@ nbctl_ls_lb_del(struct ctl_context *ctx)
 
     error = lb_by_name_or_uuid(ctx, ctx->argv[2], true, &del_lb);
     if (error) {
-        ctl_fatal("%s", error);
+        ctx->error = error;
+        return;
     }
     for (size_t i = 0; i < ls->n_load_balancer; i++) {
         const struct nbrec_load_balancer *lb
@@ -2741,7 +2776,8 @@ nbctl_ls_lb_list(struct ctl_context *ctx)
 
     char *error = ls_by_name_or_uuid(ctx, ls_name, true, &ls);
     if (error) {
-        ctl_fatal("%s", error);
+        ctx->error = error;
+        return;
     }
     for (int i = 0; i < ls->n_load_balancer; i++) {
         const struct nbrec_load_balancer *lb
@@ -2898,7 +2934,8 @@ nbctl_dhcp_options_set_options(struct ctl_context *ctx)
     const struct nbrec_dhcp_options *dhcp_opts;
     char *error = dhcp_options_get(ctx, ctx->argv[1], true, &dhcp_opts);
     if (error) {
-        ctl_fatal("%s", error);
+        ctx->error = error;
+        return;
     }
 
     struct smap dhcp_options = SMAP_INITIALIZER(&dhcp_options);
@@ -2922,7 +2959,8 @@ nbctl_dhcp_options_get_options(struct ctl_context *ctx)
     const struct nbrec_dhcp_options *dhcp_opts;
     char *error = dhcp_options_get(ctx, ctx->argv[1], true, &dhcp_opts);
     if (error) {
-        ctl_fatal("%s", error);
+        ctx->error = error;
+        return;
     }
 
     struct smap_node *node;
@@ -2940,7 +2978,8 @@ nbctl_dhcp_options_del(struct ctl_context *ctx)
 
     char *error = dhcp_options_get(ctx, id, must_exist, &dhcp_opts);
     if (error) {
-        ctl_fatal("%s", error);
+        ctx->error = error;
+        return;
     }
     if (!dhcp_opts) {
         return;
@@ -3401,7 +3440,8 @@ nbctl_lr_nat_list(struct ctl_context *ctx)
     const struct nbrec_logical_router *lr;
     char *error = lr_by_name_or_uuid(ctx, ctx->argv[1], true, &lr);
     if (error) {
-        ctl_fatal("%s", error);
+        ctx->error = error;
+        return;
     }
 
     struct smap lr_nats = SMAP_INITIALIZER(&lr_nats);
@@ -3558,7 +3598,8 @@ nbctl_lrp_set_gateway_chassis(struct ctl_context *ctx)
     const struct nbrec_gateway_chassis *existing_gc;
     error = gc_by_name_or_uuid(ctx, gc_name, false, &existing_gc);
     if (error) {
-        ctl_fatal("%s", error);
+        ctx->error = error;
+        return;
     }
     if (existing_gc) {
         nbrec_gateway_chassis_set_priority(existing_gc, priority);
@@ -3850,7 +3891,8 @@ nbctl_lrp_del(struct ctl_context *ctx)
 
     char *error = lrp_by_name_or_uuid(ctx, ctx->argv[1], must_exist, &lrp);
     if (error) {
-        ctl_fatal("%s", error);
+        ctx->error = error;
+        return;
     }
     if (!lrp) {
         return;
@@ -3883,7 +3925,8 @@ nbctl_lrp_list(struct ctl_context *ctx)
 
     char *error = lr_by_name_or_uuid(ctx, id, true, &lr);
     if (error) {
-        ctl_fatal("%s", error);
+        ctx->error = error;
+        return;
     }
 
     smap_init(&lrps);
@@ -3936,7 +3979,8 @@ nbctl_lrp_get_enabled(struct ctl_context *ctx)
 
     char *error = lrp_by_name_or_uuid(ctx, id, true, &lrp);
     if (error) {
-        ctl_fatal("%s", error);
+        ctx->error = error;
+        return;
     }
     if (!lrp) {
         return;
@@ -4019,7 +4063,8 @@ nbctl_lr_route_list(struct ctl_context *ctx)
 
     char *error = lr_by_name_or_uuid(ctx, ctx->argv[1], true, &lr);
     if (error) {
-        ctl_fatal("%s", error);
+        ctx->error = error;
+        return;
     }
 
     ipv4_routes = xmalloc(sizeof *ipv4_routes * lr->n_static_routes);
