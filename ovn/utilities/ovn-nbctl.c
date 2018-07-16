@@ -1820,16 +1820,17 @@ parse_direction(const char *arg)
     }
 }
 
-static int
-parse_priority(const char *arg)
+static char * OVS_WARN_UNUSED_RESULT
+parse_priority(const char *arg, int64_t *priority_p)
 {
     /* Validate priority. */
     int64_t priority;
     if (!ovs_scan(arg, "%"SCNd64, &priority)
         || priority < 0 || priority > 32767) {
-        ctl_fatal("%s: priority must in range 0...32767", arg);
+        return xasprintf("%s: priority must in range 0...32767", arg);
     }
-    return priority;
+    *priority_p = priority;
+    return NULL;
 }
 
 static void
@@ -1846,7 +1847,12 @@ nbctl_acl_add(struct ctl_context *ctx)
     }
 
     const char *direction = parse_direction(ctx->argv[2]);
-    int64_t priority = parse_priority(ctx->argv[3]);
+    int64_t priority;
+    error = parse_priority(ctx->argv[3], &priority);
+    if (error) {
+        ctx->error = error;
+        return;
+    }
 
     /* Validate action. */
     if (strcmp(action, "allow") && strcmp(action, "allow-related")
@@ -1961,7 +1967,11 @@ nbctl_acl_del(struct ctl_context *ctx)
         return;
     }
 
-    int64_t priority = parse_priority(ctx->argv[3]);
+    int64_t priority;
+    error = parse_priority(ctx->argv[3], &priority);
+    if (error) {
+        ctl_fatal("%s", error);
+    }
 
     if (ctx->argc == 4) {
         ctl_fatal("cannot specify priority without match");
@@ -2044,12 +2054,18 @@ nbctl_qos_add(struct ctl_context *ctx)
 {
     const struct nbrec_logical_switch *ls;
     const char *direction = parse_direction(ctx->argv[2]);
-    int64_t priority = parse_priority(ctx->argv[3]);
+    int64_t priority;
     int64_t dscp = -1;
     int64_t rate = 0;
     int64_t burst = 0;
+    char *error;
 
-    char *error = ls_by_name_or_uuid(ctx, ctx->argv[1], true, &ls);
+    error = parse_priority(ctx->argv[3], &priority);
+    if (error) {
+        ctx->error = error;
+        return;
+    }
+    error = ls_by_name_or_uuid(ctx, ctx->argv[1], true, &ls);
     if (error) {
         ctx->error = error;
         return;
@@ -2175,7 +2191,11 @@ nbctl_qos_del(struct ctl_context *ctx)
         return;
     }
 
-    int64_t priority = parse_priority(ctx->argv[3]);
+    int64_t priority;
+    error = parse_priority(ctx->argv[3], &priority);
+    if (error) {
+        ctl_fatal("%s", error);
+    }
 
     if (ctx->argc == 4) {
         ctl_fatal("cannot specify priority without match");
@@ -3488,7 +3508,11 @@ nbctl_lrp_set_gateway_chassis(struct ctl_context *ctx)
 
     const char *chassis_name = ctx->argv[2];
     if (ctx->argv[3]) {
-        priority = parse_priority(ctx->argv[3]);
+        error = parse_priority(ctx->argv[3], &priority);
+        if (error) {
+            ctx->error = error;
+            return;
+        }
     }
 
     gc_name = xasprintf("%s-%s", lrp_name, chassis_name);
